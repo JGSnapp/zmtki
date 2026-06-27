@@ -1,0 +1,19 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+Thumbs.db
+nul
+
+# Local runtime data
+data/
+.codex/
+workspace/*
+!workspace/.gitkeep
+
+# Cursor / local notify marker
+.codex-miro-notify
+**/.codex-miro-notify
+
+# Debug scratch scripts
+bug*.cjs
+shot*.cjs

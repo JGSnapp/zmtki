@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Miro</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <nav class="board-tabs-bar" id="boardTabsBar" aria-label="Доски">
+      <div class="board-tabs" id="boardTabsList"></div>
+      <button type="button" class="board-tab-add" id="addBoardTabBtn" title="Открыть папку как новую доску">+</button>
+    </nav>
+    <!-- Top mode switch lives inside the canvas topbar -->
+    <main class="app" id="canvasApp">
+      <aside class="toolbar" aria-label="Tools">
+        <button class="tool active" data-tool="select" title="Выделение — 1 палец/клик; 2 пальца = перемещение по плоскости">↖</button>
+        <button class="tool" data-tool="pan" title="Рука — или 2 пальца на тачпаде / зажатый Пробел">✋</button>
+        <span class="split"></span>
+        <button class="tool" data-tool="rect" title="Rectangle">□</button>
+        <button class="tool" data-tool="ellipse" title="Ellipse">○</button>
+        <button class="tool" data-tool="diamond" title="Diamond">◇</button>
+        <button class="tool" data-tool="sticky" title="Sticky note">▣</button>
+        <button class="tool" data-tool="frame" title="Frame">▢</button>
+        <button class="tool" data-tool="card" title="Карточка (markdown документ)">▤</button>
+        <span class="split"></span>
+        <button class="tool" data-tool="text" title="Text">T</button>
+        <button class="tool" data-tool="line" title="Line">╱</button>
+        <button class="tool" data-tool="arrow" title="Arrow">→</button>
+        <button class="tool" data-tool="pen" title="Pen">⌁</button>
+        <button class="tool" id="imageBtn" title="Image">▧</button>
+      </aside>
+
+      <header class="topbar">
+        <div class="brand">Codex Miro</div>
+        <nav class="mode-switch" aria-label="View mode">
+          <button class="mode active" data-mode="canvas" title="Холст">🗺</button>
+          <button class="mode" data-mode="docs" title="Документы">📄</button>
+        </nav>
+        <div class="controls">
+          <label class="field" title="Fill">
+            <span>Fill</span>
+            <input id="fillInput" type="color" value="#ffffff">
+          </label>
+          <div class="seg gradient-picker" id="gradientPicker" hidden title="Градиент заливки">
+            <button type="button" data-grad="sunset" title="Закат"></button>
+            <button type="button" data-grad="ocean" title="Океан"></button>
+            <button type="button" data-grad="neon" title="Неон"></button>
+            <button type="button" data-grad="lime" title="Лайм"></button>
+            <button type="button" data-grad="violet" title="Фиолет"></button>
+            <button type="button" data-grad="fire" title="Огонь"></button>
+            <button type="button" data-grad="candy" title="Конфета"></button>
+            <button type="button" data-grad="aurora" title="Аврора"></button>
+          </div>
+          <label class="field" title="Stroke">
+            <span>Stroke</span>
+            <input id="strokeInput" type="color" value="#1f2937">
+          </label>
+          <label class="field narrow" title="Толщина линии">
+            <span>LW</span>
+            <input id="strokeWidthInput" type="number" min="0" max="40" value="2">
+          </label>
+          <label class="field narrow" title="Text size">
+            <span>Text</span>
+            <input id="fontSizeInput" type="number" min="8" max="96" value="18">
+          </label>
+          <div class="seg" id="routeSwitch" hidden title="Маршрут стрелки">
+            <button type="button" data-route="straight" title="Прямая">╱</button>
+            <button type="button" data-route="curve" title="Кривая">⌒</button>
+            <button type="button" data-route="elbow" title="Ломаная">⌐</button>
+            <button type="button" data-route="orthogonal" title="Под 90°">⊐</button>
+          </div>
+          <div class="seg" id="dashSwitch" hidden title="Штриховка линии">
+            <button type="button" data-dash="solid" title="Сплошная">━</button>
+            <button type="button" data-dash="dashed" title="Штрих">┅</button>
+            <button type="button" data-dash="dotted" title="Пунктир">┈</button>
+          </div>
+          <button id="undoBtn" title="Undo">↶</button>
+          <button id="redoBtn" title="Redo">↷</button>
+          <button id="copyBtn" title="Copy">⧉</button>
+          <button id="deleteBtn" title="Delete">⌫</button>
+          <button id="fileBtn" title="Рабочая папка">Файл</button>
+          <button id="openFolderBtn" title="Открыть в проводнике">Проводник</button>
+          <button id="reloadBtn" title="Подгрузить изменения из папки">Обновить</button>
+          <button id="hidePlaneBtn" title="Скрыть с плоскости">Скрыть</button>
+          <button id="showPlaneBtn" title="Показать на плоскости">Показать</button>
+          <button id="imageFitBtn" title="Растянуть изображение" hidden>⤢</button>
+          <button id="importBtn">Import</button>
+          <button id="resetBtn">Clear</button>
+        </div>
+      </header>
+
+      <section class="stage" id="stage">
+        <svg id="boardSvg" role="application" aria-label="Whiteboard">
+          <defs>
+            <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+              <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#d8dee9" stroke-width="1"/>
+            </pattern>
+            <marker id="arrowHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
+            </marker>
+          </defs>
+          <rect id="gridRect" x="-100000" y="-100000" width="200000" height="200000" fill="url(#grid)"></rect>
+          <g id="viewport"></g>
+          <g id="overlay"></g>
+        </svg>
+        <div class="status">
+          <span id="zoomLabel">100%</span>
+          <span id="selectionLabel">No selection</span>
+          <span id="syncLabel">Выберите папку</span>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===== DOCS MODE ===== -->
+    <section class="docs" id="docsView">
+      <header class="docs-topbar">
+        <div class="brand">Codex Miro</div>
+        <nav class="mode-switch" aria-label="View mode">
+          <button class="mode" data-mode="canvas" title="Холст">🗺</button>
+          <button class="mode active" data-mode="docs" title="Документы">📄</button>
+        </nav>
+        <div class="docs-controls">
+          <button id="docsNewBtn">+ Новая карточка</button>
+          <button id="docsOpenFolderBtn" title="Открыть папку в проводнике">Проводник</button>
+          <button id="docsReloadBtn" title="Подгрузить изменения">Обновить</button>
+        </div>
+      </header>
+
+      <!-- catalog grid -->
+      <div class="docs-catalog" id="docsCatalog"></div>
+    </section>
+
+    <!-- ===== CARD EDITOR (overlay) ===== -->
+    <section class="editor-view" id="editorView">
+      <header class="editor-topbar">
+        <button id="editorBackBtn" title="Назад">←</button>
+        <input id="editorTitle" class="editor-title" type="text" placeholder="Без названия">
+        <button id="editorHeaderBtn" title="Шапка карточки">🖼 Шапка</button>
+        <button id="editorSaveBtn" title="Сохранить">✓</button>
+      </header>
+
+      <div class="editor-blocks" id="editorBlocks"></div>
+
+      <div class="editor-add" id="editorAdd">
+        <button id="editorAddBtn" class="editor-add-btn" title="Добавить блок">＋ Добавить блок</button>
+      </div>
+
+      <!-- floating format bar shown over a text selection -->
+      <div class="fmt-bar" id="fmtBar" hidden></div>
+      <!-- slash command menu -->
+      <div class="slash-menu" id="slashMenu" hidden></div>
+    </section>
+
+    <!-- ===== CARD HEADER MODAL ===== -->
+    <div class="modal-backdrop" id="headerModal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Шапка карточки">
+        <header class="modal-head">
+          <span>Шапка карточки</span>
+          <button id="headerModalClose" title="Закрыть">✕</button>
+        </header>
+        <div class="modal-body">
+          <div class="header-preview" id="headerPreview"></div>
+          <label class="head-field">
+            <span>Картинка</span>
+            <div class="image-row">
+              <button type="button" id="headerPickImg">📎 Прикрепить файл</button>
+              <input id="headerImageInput" type="text" placeholder="или вставьте ссылку https://…">
+            </div>
+          </label>
+          <label class="head-field">
+            <span>Заголовок</span>
+            <input id="headerTitle" type="text" placeholder="Заголовок карточки">
+          </label>
+          <label class="head-field">
+            <span>Подпись</span>
+            <input id="headerCaption" type="text" placeholder="Подпись / подзаголовок">
+          </label>
+          <p class="modal-hint">Если шапка заполнена, markdown-контент на холсте не показывается — только шапка.</p>
+        </div>
+        <footer class="modal-foot">
+          <button id="headerClear" class="link-btn">Очистить шапку</button>
+          <button id="headerApply" class="primary">Готово</button>
+        </footer>
+      </div>
+    </div>
+
+    <input id="headerFileInput" type="file" accept="image/*" hidden>
+    <input id="imageInput" type="file" accept="image/*" hidden>
+    <input id="importInput" type="file" accept="application/json,.json" hidden>
+    <script src="/markdown.js"></script>
+    <script src="/docs.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

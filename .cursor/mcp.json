@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "codex-miro": {
+      "command": "node",
+      "args": ["src/mcp.js"],
+      "env": {
+        "WORKSPACE_DIR": "workspace"
+      }
+    }
+  }
+}
