@@ -53,6 +53,10 @@ async function resolveProvider(providerId = "") {
   return provider;
 }
 
+export async function resolveProviderRecord(providerId = "") {
+  return resolveProvider(providerId);
+}
+
 // ---------- public entry point ----------
 // messages: [{ role: "system"|"user"|"assistant"|"tool", content, name?, tool_call_id? }]
 // options:  { providerId?, model?, tools?: [{name, description, parameters}], images?: [dataUrl], temperature?, maxTokens? }
@@ -258,6 +262,44 @@ function safeParseJson(text) {
 
 async function safeText(res) {
   try { return (await res.text()).slice(0, 500); } catch { return ""; }
+}
+
+// Generate an image via OpenAI-compatible /v1/images/generations.
+export async function generateImage(prompt, options = {}) {
+  const provider = await resolveProvider(options.providerId);
+  const url = `${baseUrl(provider)}/v1/images/generations`;
+  const body = {
+    model: options.model || provider.imageModel || "dall-e-3",
+    prompt: String(prompt || ""),
+    n: 1,
+    size: options.size || "1024x1024",
+    response_format: "b64_json"
+  };
+  try {
+    const data = await withTimeout(async (controller) => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${provider.apiKey}`,
+          ...(provider.extraHeaders || {})
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (!res.ok) throw new Error(`Image generation error ${res.status}: ${await safeText(res)}`);
+      return res.json();
+    });
+    const item = data.data?.[0];
+    if (!item?.b64_json) return { error: "Provider returned no image data" };
+    return {
+      base64: item.b64_json,
+      revisedPrompt: item.revised_prompt || prompt,
+      raw: { provider: provider.kind, model: body.model }
+    };
+  } catch (error) {
+    return { error: error.message };
+  }
 }
 
 // Quick connectivity probe used by the settings UI ("Test" button).

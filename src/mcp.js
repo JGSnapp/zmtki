@@ -21,6 +21,7 @@ import {
   appendChatMessage
 } from "./store.js";
 import { runAgent, regionSnapshot } from "./agent.js";
+import { webSearch, researchTopic, generateImageAsset, createRegionFrame } from "./builtinTools.js";
 
 await ensureDataFile();
 debugLog("server started");
@@ -377,6 +378,53 @@ const tools = [
       required: ["text"],
       additionalProperties: false
     }
+  },
+  {
+    name: "web_search",
+    description: "Search the web (DuckDuckGo instant answers) for research.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "research_topic",
+    description: "Research a topic, synthesize markdown, save as .md in workspace.",
+    inputSchema: {
+      type: "object",
+      properties: { topic: { type: "string" } },
+      required: ["topic"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "generate_image",
+    description: "Generate an image from a prompt and add it to the board.",
+    inputSchema: {
+      type: "object",
+      properties: { prompt: { type: "string" } },
+      required: ["prompt"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "create_region_frame",
+    description: "Create a labeled frame region and optionally attach elements.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        label: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+        width: { type: "number" },
+        height: { type: "number" },
+        elementIds: { type: "array", items: { type: "string" } }
+      },
+      required: ["label"],
+      additionalProperties: false
+    }
   }
 ];
 
@@ -714,6 +762,28 @@ const handlers = {
       text: String(args.text || "")
     });
     return { ok: true, id: msg.id };
+  },
+
+  async web_search(args) {
+    return webSearch(String(args.query || ""));
+  },
+
+  async research_topic(args) {
+    return researchTopic(String(args.topic || ""));
+  },
+
+  async generate_image(args) {
+    return generateImageAsset(String(args.prompt || ""));
+  },
+
+  async create_region_frame(args) {
+    return createRegionFrame(String(args.label || "Region"), {
+      x: args.x,
+      y: args.y,
+      width: args.width,
+      height: args.height,
+      elementIds: args.elementIds || []
+    });
   }
 };
 

@@ -27,6 +27,7 @@ import {
 } from "./store.js";
 import { listProviders, testProvider } from "./providers.js";
 import { runAgent, regionSnapshot } from "./agent.js";
+import { syncBoardFromWorkspace, isHiddenWorkspaceFile, isPlaneFileName } from "./workspaceSync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "..", "public");
@@ -77,8 +78,38 @@ function scheduleWorkspaceBroadcast() {
   watchTimer = setTimeout(() => broadcast("workspace:changed", { ts: Date.now() }), 120);
 }
 
+let syncTimer = null;
+
+function scheduleWorkspaceSync() {
+  if (watchSelfWrite) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    try {
+      watchSelfWrite = true;
+      const board = await readBoard();
+      const { board: synced, stats } = await syncBoardFromWorkspace(board, { merge: true });
+      if (stats.added || stats.updated) {
+        await writeBoard(synced);
+        broadcast("workspace:synced", stats);
+      }
+    } catch (error) {
+      console.warn("workspace sync:", error.message);
+    } finally {
+      setTimeout(() => { watchSelfWrite = false; }, 400);
+    }
+  }, 300);
+}
+
 try {
-  fs.watch(getWorkspaceDir(), { recursive: true }, () => scheduleWorkspaceBroadcast());
+  fs.watch(getWorkspaceDir(), { recursive: true }, (_event, filename) => {
+    const name = String(filename || "");
+    if (name && (isPlaneFileName(name) || isHiddenWorkspaceFile(name) && name.startsWith(".zmtki"))) {
+      scheduleWorkspaceBroadcast();
+      return;
+    }
+    scheduleWorkspaceSync();
+    scheduleWorkspaceBroadcast();
+  });
 } catch (error) {
   console.warn(`Workspace watch unavailable: ${error.message}`);
 }
@@ -134,12 +165,53 @@ setInterval(async () => {
 
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/board") {
-    const board = await readBoard();
+    let board = await readBoard();
+    if (url.searchParams.get("sync") === "1") {
+      const synced = await syncBoardFromWorkspace(board, { merge: true });
+      board = synced.board;
+      if (synced.stats.added || synced.stats.updated) {
+        watchSelfWrite = true;
+        try { board = await writeBoard(board); } finally {
+          setTimeout(() => { watchSelfWrite = false; }, 400);
+        }
+      }
+    }
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store"
     });
     res.end(JSON.stringify(board));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/workspace/sync") {
+    const board = await readBoard();
+    const { board: synced, stats } = await syncBoardFromWorkspace(board, { merge: true });
+    watchSelfWrite = true;
+    let saved = synced;
+    try { saved = await writeBoard(synced); } finally {
+      setTimeout(() => { watchSelfWrite = false; }, 400);
+    }
+    sendJson(res, 200, { ok: true, stats, board: saved });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/workspace/file") {
+    const name = String(url.searchParams.get("name") || "");
+    if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) {
+      sendJson(res, 400, { error: "invalid file name" });
+      return;
+    }
+    const filePath = path.join(getWorkspaceDir(), name);
+    try {
+      const data = await fs.readFile(filePath);
+      const ext = path.extname(name).slice(1).toLowerCase();
+      const type = IMAGE_TYPES[ext] || "application/octet-stream";
+      res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
+      res.end(data);
+    } catch {
+      sendJson(res, 404, { error: "file not found" });
+    }
     return;
   }
 

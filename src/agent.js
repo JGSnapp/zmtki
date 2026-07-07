@@ -27,17 +27,8 @@ import {
   StateGraph
 } from "@langchain/langgraph";
 import { chatComplete } from "./providers.js";
-import {
-  getWorkspaceDir,
-  readBoard,
-  updateBoard,
-  readChat,
-  appendChatMessage,
-  consumeLlmContext,
-  normalizeElement,
-  mergeElement,
-  newId
-} from "./store.js";
+import { getWorkspaceDir, readBoard, writeBoard, updateBoard, readChat, appendChatMessage, consumeLlmContext, normalizeElement, mergeElement, newId } from "./store.js";
+import { webSearch, researchTopic, generateImageAsset, createDocumentFromOutline, createRegionFrame } from "./builtinTools.js";
 
 const MAX_ITERATIONS = 8;
 // Working-field size limits the agent can grow/shrink itself to.
@@ -203,6 +194,13 @@ function buildTools({ snapshotRenderer }) {
         required: ["id"]
       },
       async run(ctx, args) {
+        const board = await readBoard();
+        const target = board.elements.find((e) => e.id === args.id && e.type === "card");
+        if (!target) return { error: "card not found" };
+        const field = await currentField(ctx.agentId);
+        if (!intersectsField(target, field)) {
+          return { error: "card is outside your working field — move your field over it first" };
+        }
         let updated = null;
         await updateBoard((board) => {
           board.elements = board.elements.map((e) => {
@@ -346,6 +344,161 @@ function buildTools({ snapshotRenderer }) {
       async run() {
         const items = await consumeLlmContext();
         return { count: items.length, items };
+      }
+    },
+    {
+      name: "web_search",
+      description: "Search the web for a topic (DuckDuckGo instant answers). Use for external research before writing cards.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"]
+      },
+      async run(_ctx, args) {
+        return webSearch(String(args.query || ""));
+      }
+    },
+    {
+      name: "research_topic",
+      description: "Research a topic on the web, synthesize a markdown brief, save it as a .md file in the workspace and return the summary.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" } },
+        required: ["topic"]
+      },
+      async run(ctx, args) {
+        const agent = await loadAgent(ctx.agentId);
+        const result = await researchTopic(String(args.topic || ""), {
+          providerId: agent.meta?.providerId || "",
+          model: agent.meta?.model || ""
+        });
+        if (result.ok) ctx.logAction({ type: "research_topic", fileName: result.fileName });
+        return result;
+      }
+    },
+    {
+      name: "generate_image",
+      description: "Generate an image from a text prompt (requires an OpenAI-compatible image API). Saves PNG to workspace and adds an image element to the board.",
+      parameters: {
+        type: "object",
+        properties: { prompt: { type: "string" }, size: { type: "string", description: "e.g. 1024x1024" } },
+        required: ["prompt"]
+      },
+      async run(ctx, args) {
+        const agent = await loadAgent(ctx.agentId);
+        const field = await currentField(ctx.agentId);
+        const result = await generateImageAsset(String(args.prompt || ""), {
+          providerId: agent.meta?.providerId || "",
+          model: agent.meta?.model || "",
+          size: args.size
+        });
+        if (result.ok && result.elementId) {
+          await updateBoard((board) => {
+            board.elements = board.elements.map((e) => {
+              if (e.id !== result.elementId) return e;
+              return mergeElement(e, { x: field.x + 24, y: field.y + 24 });
+            });
+            return board;
+          });
+          ctx.logAction({ type: "generate_image", fileName: result.fileName });
+        }
+        return result;
+      }
+    },
+    {
+      name: "create_document",
+      description: "Create a structured markdown document (saved as .md + card on board) from a title and section list.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          sections: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { title: { type: "string" }, body: { type: "string" } }
+            }
+          }
+        },
+        required: ["title"]
+      },
+      async run(ctx, args) {
+        const field = await currentField(ctx.agentId);
+        const result = await createDocumentFromOutline(String(args.title || ""), args.sections || [], {
+          x: field.x + 32,
+          y: field.y + 32
+        });
+        if (result.ok) ctx.logAction({ type: "create_document", fileName: result.fileName });
+        return result;
+      }
+    },
+    {
+      name: "create_region_frame",
+      description: "Create a labeled frame region on the board and optionally attach element ids to it (sections for research/product areas).",
+      parameters: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+          elementIds: { type: "array", items: { type: "string" } }
+        },
+        required: ["label"]
+      },
+      async run(ctx, args) {
+        const field = await currentField(ctx.agentId);
+        const result = await createRegionFrame(String(args.label || "Region"), {
+          x: args.x ?? field.x,
+          y: args.y ?? field.y,
+          width: args.width ?? field.width,
+          height: args.height ?? field.height,
+          elementIds: args.elementIds || []
+        });
+        if (result.ok) ctx.logAction({ type: "create_region_frame", frameId: result.frameId });
+        return result;
+      }
+    },
+    {
+      name: "fit_agent_to_region",
+      description: "Move and resize your working field to exactly cover a frame region or a set of element ids.",
+      parameters: {
+        type: "object",
+        properties: {
+          frameId: { type: "string" },
+          elementIds: { type: "array", items: { type: "string" } },
+          padding: { type: "number" }
+        }
+      },
+      async run(ctx, args) {
+        const board = await readBoard();
+        const pad = Number(args.padding) || 16;
+        let bounds = null;
+        if (args.frameId) {
+          const frame = board.elements.find((e) => e.id === args.frameId && e.type === "frame");
+          if (!frame) return { error: "frame not found" };
+          bounds = { x: frame.x, y: frame.y, width: frame.width, height: frame.height };
+        } else if (args.elementIds?.length) {
+          const ids = new Set(args.elementIds.map(String));
+          const items = board.elements.filter((e) => ids.has(e.id));
+          if (!items.length) return { error: "no elements found" };
+          const xs = items.map((e) => e.x);
+          const ys = items.map((e) => e.y);
+          const x2 = items.map((e) => e.x + (e.width || 0));
+          const y2 = items.map((e) => e.y + (e.height || 0));
+          bounds = {
+            x: Math.min(...xs) - pad,
+            y: Math.min(...ys) - pad,
+            width: Math.max(...x2) - Math.min(...xs) + pad * 2,
+            height: Math.max(...y2) - Math.min(...ys) + pad * 2
+          };
+        } else {
+          return { error: "frameId or elementIds required" };
+        }
+        await moveAgentElement(ctx.agentId, bounds);
+        ctx.logAction({ type: "fit_agent_to_region", ...bounds });
+        return { ok: true, field: bounds };
       }
     }
   ];
@@ -577,11 +730,14 @@ async function setAgentStatus(agentId, status, errorMessage = "") {
 function systemPrompt(agent) {
   const name = agent.meta?.name || "Agent";
   const custom = agent.meta?.systemPrompt?.trim();
-  if (custom) return custom;
+  const topic = agent.meta?.regionTopic?.trim();
+  const topicLine = topic ? `\nYour assigned section topic: ${topic}. Focus on this area of the board.` : "";
+  if (custom) return custom + topicLine;
   return [
     `You are ${name}, an autonomous agent living on the zmtki whiteboard.`,
     "Your working field is a rectangle on the plane; you can only directly see objects inside it.",
-    "You can move and resize your field, snapshot it as an image, read/write files in the workspace, read and create cards, and post to the shared chat.",
+    "You can move and resize your field, snapshot it as an image, read/write files in the workspace, read and create cards, post to chat, search the web, run research_topic, generate images, and organize sections with create_region_frame.",
+    "Your edits to existing cards are limited to cards inside your working field. Use board_overview and fit_agent_to_region to navigate between sections.",
     "Be concise. Prefer text tools over image snapshots. After acting, briefly report what you did.",
     "Coordinates are in board units (pixels). Other agents and the user can be reached via send_chat."
   ].join("\n");

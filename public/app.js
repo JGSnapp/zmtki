@@ -21,6 +21,7 @@ const agentNameInput = document.querySelector("#agentNameInput");
 const agentProviderSelect = document.querySelector("#agentProviderSelect");
 const agentModelInput = document.querySelector("#agentModelInput");
 const agentPromptInput = document.querySelector("#agentPromptInput");
+const agentRegionTopicInput = document.querySelector("#agentRegionTopicInput");
 const agentFieldVisible = document.querySelector("#agentFieldVisible");
 const agentRunBtn = document.querySelector("#agentRunBtn");
 const agentOpenChatBtn = document.querySelector("#agentOpenChatBtn");
@@ -376,11 +377,37 @@ function normalizeBoardImages() {
   for (const element of state.board.elements) {
     if (element.type === "image") normalizeImageBox(element);
   }
+  hydrateServerElementUrls(state.board.elements);
+}
+
+function workspaceFileApiUrl(name) {
+  return `/api/workspace/file?name=${encodeURIComponent(name)}`;
+}
+
+function hydrateServerElementUrls(elements) {
+  if (state.boardKind !== "server") return;
+  for (const element of elements) {
+    const sourceFile = element.meta?.sourceFile;
+    if (sourceFile && element.type === "image") {
+      element.url = workspaceFileApiUrl(sourceFile);
+    }
+    if (element.type === "card" && element.meta?.imageFile) {
+      element.meta.image = workspaceFileApiUrl(element.meta.imageFile);
+    }
+  }
+}
+
+async function reloadServerWorkspace(options = {}) {
+  try {
+    await fetch("/api/workspace/sync", { method: "POST" });
+    flashSyncLabel("Папка синхронизирована");
+  } catch { /* ignore */ }
+  return loadServerBoard({ force: true, preserveSelection: true, ...options });
 }
 
 async function loadServerBoard(options = {}) {
   try {
-    const res = await fetch("/api/board", { cache: "no-store" });
+    const res = await fetch("/api/board?sync=1", { cache: "no-store" });
     if (!res.ok) throw new Error(`board fetch failed: ${res.status}`);
     const board = await res.json();
     const remoteSig = boardSignature(board);
@@ -978,6 +1005,11 @@ async function resolvePlaneFileHandle(dirHandle, files) {
   return dirHandle.getFileHandle(PLANE_FILE, { create: true });
 }
 
+function isHiddenWorkspaceFile(name) {
+  const n = String(name || "");
+  return n.startsWith(".") || n.startsWith("_");
+}
+
 function isPlaneFileName(name) {
   return name === PLANE_FILE || name === LEGACY_PLANE_FILE
     || (name.startsWith(workspaceBoardPrefix) && name.endsWith(".json"))
@@ -1043,10 +1075,11 @@ async function syncWorkspaceFromFolder({ merge = false } = {}) {
   const files = await listWorkspaceFiles(dirHandle);
   await registerWorkspaceAssets(files);
 
-  const mdFiles = files.filter((handle) => extensionOf(handle.name) === "md");
-  const imageFiles = files.filter((handle) => isImageName(handle.name));
+  const mdFiles = files.filter((handle) => !isHiddenWorkspaceFile(handle.name) && extensionOf(handle.name) === "md");
+  const imageFiles = files.filter((handle) => !isHiddenWorkspaceFile(handle.name) && isImageName(handle.name));
   const otherFiles = files.filter((handle) => {
     if (isPlaneFileName(handle.name)) return false;
+    if (isHiddenWorkspaceFile(handle.name)) return false;
     return extensionOf(handle.name) !== "md" && !isImageName(handle.name);
   });
 
@@ -1277,7 +1310,10 @@ function wireToolbar() {
   document.querySelector("#deleteBtn").addEventListener("click", deleteSelected);
   document.querySelector("#fileBtn").addEventListener("click", openWorkspaceFolder);
   document.querySelector("#openFolderBtn").addEventListener("click", openWorkspaceInExplorer);
-  document.querySelector("#reloadBtn").addEventListener("click", () => reloadWorkspaceFromFolder());
+  document.querySelector("#reloadBtn").addEventListener("click", () => {
+    if (state.boardKind === "server") reloadServerWorkspace();
+    else reloadWorkspaceFromFolder();
+  });
   document.querySelector("#hidePlaneBtn").addEventListener("click", () => setPlaneHiddenForSelection(true));
   document.querySelector("#showPlaneBtn").addEventListener("click", () => setPlaneHiddenForSelection(false));
   imageFitBtn?.addEventListener("click", toggleImageFit);
@@ -1302,6 +1338,7 @@ function wireToolbar() {
   agentProviderSelect?.addEventListener("change", () => patchSelectedAgentMeta({ providerId: agentProviderSelect.value }));
   agentModelInput?.addEventListener("change", () => patchSelectedAgentMeta({ model: agentModelInput.value }));
   agentPromptInput?.addEventListener("change", () => patchSelectedAgentMeta({ systemPrompt: agentPromptInput.value }));
+  agentRegionTopicInput?.addEventListener("change", () => patchSelectedAgentMeta({ regionTopic: agentRegionTopicInput.value }));
   agentFieldVisible?.addEventListener("change", () => patchSelectedAgentMeta({ fieldVisible: agentFieldVisible.checked }));
   agentRunBtn?.addEventListener("click", () => runSelectedAgent());
   agentOpenChatBtn?.addEventListener("click", () => {
@@ -1312,6 +1349,7 @@ function wireToolbar() {
     if (event.shiftKey) clearLlmContextBuffer();
     else addSelectionToLlmContext();
   });
+  document.querySelector("#assignFrameBtn")?.addEventListener("click", () => assignSelectionToFrame());
   document.querySelector("#agentsChatBtn")?.addEventListener("click", () => window.Agents?.toggleChat?.());
   document.querySelector("#settingsBtn")?.addEventListener("click", () => window.Agents?.openSettings?.());
 }
@@ -1565,6 +1603,7 @@ function updateAgentToolbar() {
     if (agentNameInput) agentNameInput.value = agent.meta?.name || "Agent";
     if (agentModelInput) agentModelInput.value = agent.meta?.model || "";
     if (agentPromptInput) agentPromptInput.value = agent.meta?.systemPrompt || "";
+    if (agentRegionTopicInput) agentRegionTopicInput.value = agent.meta?.regionTopic || "";
     if (agentFieldVisible) agentFieldVisible.checked = agent.meta?.fieldVisible !== false;
     if (agentProviderSelect) {
       agentProviderSelect.innerHTML = "";
@@ -1630,7 +1669,13 @@ function renderElement(element, isSelected = element.id === state.selectedId) {
 
   if (element.type === "rect" || element.type === "frame") {
     group.append(el("rect", shapeAttrs(element, { rx: element.type === "frame" ? 2 : 6 })));
-    if (element.type === "frame" && element.text) group.append(textForeignObject(element, "text-box"));
+    if (element.type === "frame") {
+      const childCount = state.board.elements.filter((e) => e.meta?.parentFrameId === element.id).length;
+      const label = `${element.text || element.meta?.regionLabel || "Frame"}${childCount ? ` (${childCount})` : ""}`;
+      if (label.trim()) group.append(textForeignObject({ ...element, text: label }, "text-box"));
+    } else if (element.text) {
+      group.append(textForeignObject(element, "text-box"));
+    }
   } else if (element.type === "ellipse") {
     group.append(el("ellipse", {
       ...shapeAttrs(element),
@@ -2403,16 +2448,27 @@ function beginMove(event, element) {
   pushHistory();
   const point = pointerWorld(event);
   const ids = selectedIds();
+  const moveIds = [...ids];
+  for (const id of ids) {
+    const frameEl = state.board.elements.find((e) => e.id === id);
+    if (frameEl?.type === "frame") {
+      for (const child of state.board.elements) {
+        if (child.meta?.parentFrameId === frameEl.id && !moveIds.includes(child.id)) {
+          moveIds.push(child.id);
+        }
+      }
+    }
+  }
   state.action = {
     type: "move",
-    ids,
+    ids: moveIds,
     start: point,
     startScreen: { x: event.clientX, y: event.clientY },
-    originals: Object.fromEntries(ids.map((id) => {
+    originals: Object.fromEntries(moveIds.map((id) => {
       const el = state.board.elements.find((e) => e.id === id);
       return [id, { x: el?.x || 0, y: el?.y || 0 }];
     })),
-    clearConnectorBindings: ids.some((id) => connectorTypes.has((state.board.elements.find((e) => e.id === id) || {}).type)),
+    clearConnectorBindings: moveIds.some((id) => connectorTypes.has((state.board.elements.find((e) => e.id === id) || {}).type)),
     openOnClick: effectiveTool(event) === "select" && (element.type === "file" || element.type === "card" || element.type === "agent") && !event.shiftKey
   };
   svg.setPointerCapture(event.pointerId);
@@ -2678,6 +2734,9 @@ function onPointerUp(event) {
   if (current?.type === "image") normalizeImageBox(current);
   if (current && connectorTypes.has(current.type)) refreshConnectorCoordinates(current);
   const shouldSave = shouldPersistAction(state.action, event);
+  if (state.action?.type === "move" && shouldSave) {
+    assignFrameParentsAfterMove(state.action.ids);
+  }
   state.action = null;
   svg.classList.remove("panning");
   if (shouldSave) saveBoard();
@@ -2875,6 +2934,8 @@ function createElement(type, point) {
       providerId: "",
       model: "",
       systemPrompt: "",
+      regionTopic: "",
+      parentFrameId: "",
       fieldVisible: true,
       status: "idle",
       lastRunAt: "",
@@ -3116,8 +3177,52 @@ function sanitizeFileName(name) {
   return String(name || "file").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim() || "file";
 }
 
+function findFrameContaining(point) {
+  const frames = state.board.elements.filter((e) => e.type === "frame" && visibleOnPlane(e));
+  for (let i = frames.length - 1; i >= 0; i--) {
+    const f = frames[i];
+    if (point.x >= f.x && point.x <= f.x + f.width && point.y >= f.y && point.y <= f.y + f.height) {
+      return f;
+    }
+  }
+  return null;
+}
+
+function assignFrameParentsAfterMove(ids) {
+  for (const id of ids) {
+    const el = state.board.elements.find((e) => e.id === id);
+    if (!el || el.type === "frame" || el.type === "agent") continue;
+    const center = { x: el.x + (el.width || 0) / 2, y: el.y + (el.height || 0) / 2 };
+    const frame = findFrameContaining(center);
+    if (frame) el.meta = { ...(el.meta || {}), parentFrameId: frame.id };
+  }
+}
+
+function assignSelectionToFrame() {
+  const ids = selectedIds();
+  const frame = ids.map((id) => state.board.elements.find((e) => e.id === id)).find((e) => e?.type === "frame");
+  if (!frame) {
+    flashSyncLabel("Выберите frame и элементы для секции");
+    return;
+  }
+  pushHistory();
+  for (const id of ids) {
+    if (id === frame.id) continue;
+    const el = state.board.elements.find((e) => e.id === id);
+    if (!el || el.type === "agent") continue;
+    el.meta = { ...(el.meta || {}), parentFrameId: frame.id };
+  }
+  saveBoard();
+  render();
+  flashSyncLabel(`Привязано к «${frame.text || frame.meta?.regionLabel || "Frame"}»`);
+}
+
 async function openFileElement(element) {
   const sourceFile = element.meta?.sourceFile || element.meta?.fileName;
+  if (state.boardKind === "server" && sourceFile) {
+    window.open(workspaceFileApiUrl(sourceFile), "_blank", "noopener");
+    return;
+  }
   let url = sourceFile ? state.workspace?.assetUrls?.get(sourceFile) : "";
   const handle = sourceFile ? state.workspace?.fileHandles?.get(sourceFile) : null;
   if (!url && handle) {

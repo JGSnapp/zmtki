@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "mcp": "node src/mcp.js",
-    "check": "node --check src/server.js && node --check src/mcp.js && node --check src/providers.js && node --check src/agent.js && node --check src/workspace.js && node --check src/store.js && node --check public/app.js && node --check public/docs.js && node --check public/markdown.js && node --check public/stickers.js && node --check public/agents.js"
+    "check": "node --check src/server.js && node --check src/mcp.js && node --check src/providers.js && node --check src/agent.js && node --check src/builtinTools.js && node --check src/workspaceSync.js && node --check src/workspace.js && node --check src/store.js && node --check public/app.js && node --check public/docs.js && node --check public/markdown.js && node --check public/stickers.js && node --check public/agents.js"
   },
   "engines": {
     "node": ">=20"

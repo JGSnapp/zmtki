@@ -214,6 +214,14 @@ export function normalizeElement(input = {}) {
 
 function normalizeMeta(meta, type) {
   const base = meta && typeof meta === "object" ? { ...meta } : {};
+  if (type === "frame") {
+    return {
+      ...base,
+      regionLabel: str(base.regionLabel, ""),
+      regionKind: str(base.regionKind, ""),
+      parentFrameId: str(base.parentFrameId, "")
+    };
+  }
   if (type === "card") {
     return {
       ...base,
@@ -222,9 +230,7 @@ function normalizeMeta(meta, type) {
       image: str(base.image, ""),
       imageFile: str(base.imageFile, ""),
       sourceFile: str(base.sourceFile, ""),
-      // How a card renders on the plane: "auto" (header if header set, else
-      // markdown content), "header" (force header layout), "content" (force the
-      // scaled-down markdown body). Defaults to "auto" for back-compat.
+      parentFrameId: str(base.parentFrameId, ""),
       planeView: str(base.planeView, "auto"),
       planeHidden: Boolean(base.planeHidden)
     };
@@ -233,6 +239,7 @@ function normalizeMeta(meta, type) {
     return {
       ...base,
       sourceFile: str(base.sourceFile, ""),
+      parentFrameId: str(base.parentFrameId, ""),
       planeHidden: Boolean(base.planeHidden)
     };
   }
@@ -253,6 +260,8 @@ function normalizeMeta(meta, type) {
       providerId: str(base.providerId, ""),
       model: str(base.model, ""),
       systemPrompt: str(base.systemPrompt, ""),
+      regionTopic: str(base.regionTopic, ""),
+      parentFrameId: str(base.parentFrameId, ""),
       // Working-field geometry is the element's own x/y/width/height; this flag
       // toggles whether the translucent field outline is drawn around it.
       fieldVisible: base.fieldVisible === false ? false : true,

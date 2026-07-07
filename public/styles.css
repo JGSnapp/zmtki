@@ -1636,6 +1636,9 @@ button.primary:hover { background: #0c5d56; }
    but slightly transparent border to feel like a stamp. */
 .element.sticker image { filter: drop-shadow(0 2px 4px rgba(15,23,42,0.15)); }
 
+.element[data-id] .text-box { pointer-events: none; }
+.element.type-frame rect { fill: rgba(148, 163, 184, 0.06); }
+
 /* ============ Agent element on canvas (built-in agents) ============ */
 .agent-field { pointer-events: none; }
 .agent-field-rect { vector-effect: non-scaling-stroke; }
