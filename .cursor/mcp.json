@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "codex-miro": {
+    "zmtki": {
       "command": "node",
-      "args": ["src/mcp.js"],
+      "args": ["C:\\Users\\JGSnapp\\Desktop\\codex_miro\\src\\mcp.js"],
       "env": {
-        "WORKSPACE_DIR": "workspace"
+        "WORKSPACE_DIR": "C:\\Users\\JGSnapp\\Desktop\\codex_miro\\workspace"
       }
     }
   }

@@ -643,6 +643,20 @@ body.mode-editor #editorView {
   pointer-events: none;
 }
 
+/* "content" plane view: fill the whole card body with the scaled-down markdown. */
+.card-body.card-content {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.card-body.card-content .card-md {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .card-md h1 { font-size: 13px; margin: 0 0 3px; }
 .card-md h2 { font-size: 11px; margin: 0 0 3px; }
 .card-md h3 { font-size: 10px; margin: 0 0 2px; }
@@ -1327,6 +1341,47 @@ body.mode-editor #editorView {
 }
 .block-content[data-kind="table"] { padding: 4px 0; }
 
+/* ============ Image block (Task 4) ============ */
+.image-block { width: 100%; outline: none; }
+.image-block-img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  cursor: zoom-in;
+}
+.image-block-empty {
+  padding: 24px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+}
+.image-block-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.image-block-controls button {
+  height: 26px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.block-content[data-kind="image"] { padding: 4px 0; }
+
+/* Markdown image figures rendered in doc/card previews */
+.doc-md figure.md-image,
+.card-md figure.md-image { margin: 4px 0; }
+.doc-md figure.md-image img,
+.card-md figure.md-image img {
+  max-width: 100%;
+  border-radius: 6px;
+  display: block;
+}
+.card-md figure.md-image img { max-height: 120px; object-fit: cover; }
+
 /* ============ Card header modal (Task 5) ============ */
 .modal-backdrop {
   position: fixed;
@@ -1408,3 +1463,175 @@ button.primary:hover { background: #0c5d56; }
 
 /* editor topbar header button */
 #editorHeaderBtn { flex: 0 0 auto; }
+
+/* Plane view select + LLM context button in the topbar */
+.plane-view-select {
+  height: 32px;
+  min-width: 120px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.plane-view-select:focus { outline: none; border-color: var(--accent); }
+
+#addToContextBtn {
+  flex: 0 0 auto;
+}
+#addToContextBtn.has-buffer {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ============ Sticker panel (Task 6) ============ */
+.sticker-panel {
+  position: fixed;
+  z-index: 8;
+  top: calc(var(--tabs-h) + 12px);
+  left: 68px;
+  width: 280px;
+  max-height: calc(100vh - var(--tabs-h) - 24px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.sticker-panel[hidden] { display: none; }
+.sticker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 10px;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+}
+.sticker-head-actions { display: flex; gap: 4px; }
+.sticker-head-actions button {
+  height: 26px;
+  min-width: 26px;
+  font-size: 11px;
+  padding: 0 8px;
+}
+.sticker-packs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.sticker-pack {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 70px;
+  padding: 6px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  text-align: center;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sticker-pack.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.sticker-pack .sp-name {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sticker-pack .sp-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 14px;
+}
+.sticker-pack .sp-del:hover { background: #fee2e2; color: var(--danger); }
+.sticker-grid {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  align-content: start;
+}
+.sticker-cell {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  overflow: hidden;
+}
+.sticker-cell:hover { border-color: var(--accent); }
+.sticker-cell img {
+  max-width: 92%;
+  max-height: 92%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.sticker-cell .sc-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.85);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 14px;
+  opacity: 0;
+}
+.sticker-cell:hover .sc-del { opacity: 1; }
+.sticker-cell .sc-del:hover { background: #fee2e2; color: var(--danger); }
+.sticker-cell.fav { border-color: var(--accent); }
+.sticker-empty {
+  grid-column: 1 / -1;
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sticker-section-title {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 4px 0 2px;
+}
+
+/* Sticker element on the plane behaves like an image (pointer-events via <image>),
+   but slightly transparent border to feel like a stamp. */
+.element.sticker image { filter: drop-shadow(0 2px 4px rgba(15,23,42,0.15)); }

@@ -18,9 +18,13 @@ export function setWorkspaceDir(next) {
 
 /** @deprecated use getWorkspaceDir() */
 export const WORKSPACE_DIR = workspaceDir;
-export const PLANE_FILE = "codex-miro-plane.json";
-export const NOTIFY_FILE = ".codex-miro-notify";
-const PLANE_PREFIX = "codex-miro-plane";
+export const PLANE_FILE = "zmtki-plane.json";
+export const NOTIFY_FILE = ".zmtki-notify";
+const PLANE_PREFIX = "zmtki-plane";
+// Legacy codex-miro plane files are still readable for back-compat.
+const LEGACY_PLANE_PREFIX = "codex-miro-plane";
+const LEGACY_PLANE_FILE = "codex-miro-plane.json";
+export const LLM_CONTEXT_FILE = ".zmtki-llm-context.json";
 
 let notifyTimer = null;
 export function touchWorkspaceNotify() {
@@ -83,8 +87,10 @@ async function resolvePlanePath() {
   } catch {
     return fixed;
   }
+  // Prefer the current zmtki plane file, but transparently upgrade an existing
+  // legacy codex-miro plane file if that's all the folder has.
   const legacy = entries
-    .filter((name) => name.startsWith(PLANE_PREFIX) && name.endsWith(".json") && name !== PLANE_FILE)
+    .filter((name) => (name.startsWith(PLANE_PREFIX) || name.startsWith(LEGACY_PLANE_PREFIX)) && name.endsWith(".json") && name !== PLANE_FILE)
     .sort()
     .reverse();
   if (legacy.length) return path.join(getWorkspaceDir(), legacy[0]);
@@ -165,7 +171,8 @@ export function normalizeBoard(input = {}) {
 const TYPE_DEFAULTS = {
   card: { width: 260, height: 180, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1 },
   file: { width: 150, height: 132, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1 },
-  image: { width: 240, height: 160, fill: "transparent" }
+  image: { width: 240, height: 160, fill: "transparent" },
+  sticker: { width: 120, height: 120, fill: "transparent", stroke: "transparent", strokeWidth: 0 }
 };
 
 export function normalizeElement(input = {}) {
@@ -209,12 +216,25 @@ function normalizeMeta(meta, type) {
       image: str(base.image, ""),
       imageFile: str(base.imageFile, ""),
       sourceFile: str(base.sourceFile, ""),
+      // How a card renders on the plane: "auto" (header if header set, else
+      // markdown content), "header" (force header layout), "content" (force the
+      // scaled-down markdown body). Defaults to "auto" for back-compat.
+      planeView: str(base.planeView, "auto"),
       planeHidden: Boolean(base.planeHidden)
     };
   }
   if (type === "image" || type === "file") {
     return {
       ...base,
+      sourceFile: str(base.sourceFile, ""),
+      planeHidden: Boolean(base.planeHidden)
+    };
+  }
+  if (type === "sticker") {
+    return {
+      ...base,
+      packId: str(base.packId, ""),
+      stickerId: str(base.stickerId, ""),
       sourceFile: str(base.sourceFile, ""),
       planeHidden: Boolean(base.planeHidden)
     };
@@ -265,4 +285,63 @@ function str(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+// ---------- LLM context buffer (shared via a workspace file) ----------
+// Both the HTTP server and the MCP server read/write this file, so a selection
+// made in the browser ("Add to LLM context") is reachable from the agent
+// process through get_llm_context. Empty/missing file == empty buffer.
+
+function llmContextPath() {
+  return path.join(getWorkspaceDir(), LLM_CONTEXT_FILE);
+}
+
+export async function readLlmContext() {
+  try {
+    const raw = await fs.readFile(llmContextPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// Read the buffer and clear it (drain). Pass { peek: true } to read without
+// clearing — used to auto-attach to the next MCP call without losing it.
+export async function consumeLlmContext(options = {}) {
+  const items = await readLlmContext();
+  if (!options.peek) await writeLlmContext([]);
+  return items;
+}
+
+export async function appendLlmContext(items) {
+  const current = await readLlmContext();
+  const stamped = (Array.isArray(items) ? items : [])
+    .filter((it) => it && typeof it === "object")
+    .map((it) => ({ ...it, addedAt: it.addedAt || Date.now() }));
+  const next = [...current, ...stamped];
+  await writeLlmContext(next);
+  return next.length;
+}
+
+export async function replaceLlmContext(items) {
+  const stamped = (Array.isArray(items) ? items : [])
+    .filter((it) => it && typeof it === "object")
+    .map((it) => ({ ...it, addedAt: it.addedAt || Date.now() }));
+  await writeLlmContext(stamped);
+  return stamped.length;
+}
+
+export async function clearLlmContext() {
+  await writeLlmContext([]);
+  return 0;
+}
+
+async function writeLlmContext(items) {
+  await fs.mkdir(getWorkspaceDir(), { recursive: true });
+  const filePath = llmContextPath();
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(items, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, filePath);
+  touchWorkspaceNotify();
 }

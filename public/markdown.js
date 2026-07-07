@@ -130,6 +130,14 @@
         continue;
       }
 
+      // standalone image: ![alt](url)
+      const img = line.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)\s*$/);
+      if (img) {
+        blocks.push({ kind: "image", alt: img[1] || "", url: img[2], title: img[3] || "" });
+        i++;
+        continue;
+      }
+
       blocks.push({ kind: "text", text: line });
       i++;
     }
@@ -181,6 +189,7 @@
         case "code": line = "```\n" + (b.text || "") + "\n```"; break;
         case "divider": line = "---"; break;
         case "table": line = tableToMd(b.rows); break;
+        case "image": line = imageToMd(b); break;
         default: line = body;
       }
       // Encode alignment as an HTML comment so it round-trips without breaking
@@ -205,6 +214,14 @@
     return lines.join("\n");
   }
 
+  // Serialize an image block back to markdown: ![alt](url "title")
+  function imageToMd(b) {
+    const alt = String(b.alt || "");
+    const url = String(b.url || "");
+    const title = String(b.title || "");
+    return title ? `![${alt}](${url} "${title}")` : `![${alt}](${url})`;
+  }
+
   // ---------- inline markdown -> safe HTML ----------
 
   function escapeHtml(s) {
@@ -223,6 +240,12 @@
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
       .replace(/~~([^~]+)~~/g, "<s>$1</s>")
+      .replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g, (m, alt, url, title) => {
+        const safe = sanitizeImageUrl(url);
+        return safe
+          ? `<img src="${safe}" alt="${alt}"${title ? ` title="${title}"` : ""} style="max-width:100%">`
+          : alt;
+      })
       .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
     s = s.replace(/\u0000(\d+)\u0000/g, (_, n) => `<code>${codes[Number(n)]}</code>`);
     return s;
@@ -265,6 +288,7 @@
         case "code": out.push(`<pre><code>${escapeHtml(b.text)}</code></pre>`); break;
         case "divider": out.push("<hr>"); break;
         case "table": out.push(tableToHtml(b.rows)); break;
+        case "image": out.push(imageBlockToHtml(b)); break;
         default: out.push(`<p>${t}</p>`);
       }
     }
@@ -280,6 +304,26 @@
       out += `<tr>${rows[i].map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`;
     }
     return `${out}</tbody></table>`;
+  }
+
+  // Render a block-level image. alt/title are escaped; url is only allowed
+  // through http(s), /, blob:, data: to avoid script: in previews.
+  function imageBlockToHtml(b) {
+    const url = sanitizeImageUrl(b.url);
+    if (!url) return `<p>${escapeHtml(b.alt || "")}</p>`;
+    const alt = escapeHtml(b.alt || "");
+    const title = b.title ? ` title="${escapeHtml(b.title)}"` : "";
+    return `<figure class="md-image"><img src="${url}" alt="${alt}"${title} loading="lazy"></figure>`;
+  }
+
+  function sanitizeImageUrl(url) {
+    const v = String(url == null ? "" : url).trim();
+    if (!v) return "";
+    if (/^https?:\/\//i.test(v)) return v;
+    if (v.startsWith("/")) return v;
+    if (v.startsWith("blob:")) return v;
+    if (/^data:image\//i.test(v)) return v;
+    return "";
   }
 
   function markdownToHtml(md) {

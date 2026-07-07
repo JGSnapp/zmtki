@@ -1,8 +1,8 @@
 services:
   board:
     build: .
-    image: codex-miro:local
-    container_name: codex-miro-board
+    image: zmtki:local
+    container_name: zmtki-board
     ports:
       - "8080:8080"
     environment:

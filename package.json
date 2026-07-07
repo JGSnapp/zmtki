@@ -1,7 +1,7 @@
 {
-  "name": "codex-miro",
-  "version": "0.1.0",
-  "description": "A lightweight local whiteboard with REST and MCP access.",
+  "name": "zmtki",
+  "version": "0.2.0",
+  "description": "zmtki — a lightweight local whiteboard with REST and MCP access.",
   "private": true,
   "type": "module",
   "scripts": {

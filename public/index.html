@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codex Miro</title>
+    <title>zmtki</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -29,10 +29,11 @@
         <button class="tool" data-tool="arrow" title="Arrow">→</button>
         <button class="tool" data-tool="pen" title="Pen">⌁</button>
         <button class="tool" id="imageBtn" title="Image">▧</button>
+        <button class="tool" id="stickerBtn" title="Стикеры">★</button>
       </aside>
 
       <header class="topbar">
-        <div class="brand">Codex Miro</div>
+        <div class="brand">zmtki</div>
         <nav class="mode-switch" aria-label="View mode">
           <button class="mode active" data-mode="canvas" title="Холст">🗺</button>
           <button class="mode" data-mode="docs" title="Документы">📄</button>
@@ -79,6 +80,12 @@
           <button id="redoBtn" title="Redo">↷</button>
           <button id="copyBtn" title="Copy">⧉</button>
           <button id="deleteBtn" title="Delete">⌫</button>
+          <select id="planeViewSelect" class="plane-view-select" hidden title="Как показывать карточку на холсте">
+            <option value="auto">Вид: авто</option>
+            <option value="header">Вид: шапка</option>
+            <option value="content">Вид: текст</option>
+          </select>
+          <button id="addToContextBtn" title="Добавить выделение в контекст LLM">🧠 В контекст</button>
           <button id="fileBtn" title="Рабочая папка">Файл</button>
           <button id="openFolderBtn" title="Открыть в проводнике">Проводник</button>
           <button id="reloadBtn" title="Подгрузить изменения из папки">Обновить</button>
@@ -115,7 +122,7 @@
     <!-- ===== DOCS MODE ===== -->
     <section class="docs" id="docsView">
       <header class="docs-topbar">
-        <div class="brand">Codex Miro</div>
+        <div class="brand">zmtki</div>
         <nav class="mode-switch" aria-label="View mode">
           <button class="mode" data-mode="canvas" title="Холст">🗺</button>
           <button class="mode active" data-mode="docs" title="Документы">📄</button>
@@ -185,11 +192,27 @@
       </div>
     </div>
 
+    <!-- ===== STICKER PANEL ===== -->
+    <aside class="sticker-panel" id="stickerPanel" hidden>
+      <header class="sticker-head">
+        <span>Стикеры</span>
+        <div class="sticker-head-actions">
+          <button type="button" id="stickerAddPackBtn" title="Новый стикерпак">+ Пак</button>
+          <button type="button" id="stickerImportBtn" title="Добавить картинки в выбранный пак">＋ Картинки</button>
+          <button type="button" id="stickerCloseBtn" title="Закрыть">✕</button>
+        </div>
+      </header>
+      <div class="sticker-packs" id="stickerPacks"></div>
+      <div class="sticker-grid" id="stickerGrid"></div>
+      <input id="stickerFileInput" type="file" accept="image/*" multiple hidden>
+    </aside>
+
     <input id="headerFileInput" type="file" accept="image/*" hidden>
     <input id="imageInput" type="file" accept="image/*" hidden>
     <input id="importInput" type="file" accept="application/json,.json" hidden>
     <script src="/markdown.js"></script>
     <script src="/docs.js"></script>
+    <script src="/stickers.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

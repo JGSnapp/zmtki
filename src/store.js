@@ -3,6 +3,7 @@ export {
   WORKSPACE_DIR,
   PLANE_FILE,
   NOTIFY_FILE,
+  LLM_CONTEXT_FILE,
   newId,
   nowIso,
   ensureWorkspace as ensureDataFile,
@@ -15,5 +16,10 @@ export {
   writeCardMarkdown,
   getWorkspaceDir,
   setWorkspaceDir,
-  touchWorkspaceNotify
+  touchWorkspaceNotify,
+  readLlmContext,
+  consumeLlmContext,
+  appendLlmContext,
+  replaceLlmContext,
+  clearLlmContext
 } from "./workspace.js";

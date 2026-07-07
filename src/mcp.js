@@ -4,13 +4,17 @@ import {
   getWorkspaceDir,
   setWorkspaceDir,
   PLANE_FILE,
+  LLM_CONTEXT_FILE,
   mergeElement,
   newId,
   normalizeBoard,
   normalizeElement,
   readBoard,
   updateBoard,
-  writeBoard
+  writeBoard,
+  readLlmContext,
+  consumeLlmContext,
+  clearLlmContext
 } from "./store.js";
 
 await ensureDataFile();
@@ -40,7 +44,7 @@ const tools = [
   },
   {
     name: "get_workspace",
-    description: "Return the workspace folder path used by MCP for codex-miro-plane.json and card .md files. The browser server (npm start) must use the same WORKSPACE_DIR, or open that folder via the UI tab.",
+    description: "Return the workspace folder path used by MCP for zmtki-plane.json and card .md files. The browser server (npm start) must use the same WORKSPACE_DIR, or open that folder via the UI tab.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -247,6 +251,26 @@ const tools = [
         strokeWidth: { type: "number", default: 2 },
         text: { type: "string", default: "" }
       },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "get_llm_context",
+    description: "Return the LLM context buffer that the user populated from the board (the \"Add to LLM context\" button). Each item has { id, kind, title, text, meta }. By default the buffer is consumed (cleared) after reading. Pass peek: true to read without clearing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        peek: { type: "boolean", default: false, description: "If true, return the buffer without clearing it." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "clear_llm_context",
+    description: "Empty the LLM context buffer.",
+    inputSchema: {
+      type: "object",
+      properties: {},
       additionalProperties: false
     }
   }
@@ -478,8 +502,36 @@ const handlers = {
       return board;
     });
     return created;
+  },
+
+  async get_llm_context(args = {}) {
+    const items = await consumeLlmContext({ peek: Boolean(args.peek) });
+    return { count: items.length, items, cleared: !args.peek };
+  },
+
+  async clear_llm_context() {
+    await clearLlmContext();
+    return { ok: true, count: 0 };
   }
 };
+
+// Auto-attach behavior: if the user populated the LLM context buffer but the
+// agent never calls get_llm_context, surface it once as an extra content block on
+// the next tool result so the context isn't lost. The buffer is drained when it
+// is attached this way (matching "отправлялось вместе со следующим запросом").
+async function withAutoContext(content) {
+  try {
+    const items = await consumeLlmContext();
+    if (!items.length) return content;
+    const block = {
+      type: "text",
+      text: `[User-provided context from the board — auto-attached, buffer now cleared]\n${JSON.stringify(items, null, 2)}`
+    };
+    return [...content, block];
+  } catch {
+    return content;
+  }
+}
 
 // MCP stdio transport is newline-delimited JSON (NDJSON). Legacy clients may
 // instead wrap each message with LSP-style "Content-Length" framing; detect
@@ -558,8 +610,8 @@ async function handleMessage(message) {
           resources: {}
         },
         serverInfo: {
-          name: "codex-miro",
-          version: "0.1.0"
+          name: "zmtki",
+          version: "0.2.0"
         }
       });
       return;
@@ -574,25 +626,29 @@ async function handleMessage(message) {
       const { name, arguments: args = {} } = message.params || {};
       if (!handlers[name]) throw new Error(`Unknown tool: ${name}`);
       const result = await handlers[name](args);
-      respond(message.id, {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      });
+      const content = [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ];
+      // If the user added context but never drained it, surface it on the next
+      // tool response (and clear the buffer) — unless the tool itself is the
+      // dedicated context tool that already handles the buffer.
+      const isContextTool = name === "get_llm_context" || name === "clear_llm_context";
+      const finalContent = isContextTool ? content : await withAutoContext(content);
+      respond(message.id, { content: finalContent });
       return;
     }
 
-    if (message.method === "resources/list") {
+      if (message.method === "resources/list") {
       respond(message.id, {
         resources: [
           {
             uri: "board://current",
             name: "Current board",
             mimeType: "application/json",
-            description: "The complete current Codex Miro board JSON."
+            description: "The complete current zmtki board JSON."
           }
         ]
       });

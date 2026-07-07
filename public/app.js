@@ -15,6 +15,8 @@ const imageInput = document.querySelector("#imageInput");
 const importInput = document.querySelector("#importInput");
 const imageFitBtn = document.querySelector("#imageFitBtn");
 const gradientPicker = document.querySelector("#gradientPicker");
+const planeViewSelect = document.querySelector("#planeViewSelect");
+const addToContextBtn = document.querySelector("#addToContextBtn");
 const styleControls = [fillInput, strokeInput, strokeWidthInput, fontSizeInput]
   .map((input) => input.closest(".field"))
   .filter(Boolean);
@@ -24,12 +26,16 @@ const xlinkns = "http://www.w3.org/1999/xlink";
 const minSize = 24;
 const snapScreenRadius = 22;
 const anchorNames = ["nw", "n", "ne", "e", "se", "s", "sw", "w", "c"];
-const shapeTypes = new Set(["rect", "ellipse", "diamond", "sticky", "text", "frame", "image", "card", "file"]);
+const shapeTypes = new Set(["rect", "ellipse", "diamond", "sticky", "text", "frame", "image", "card", "file", "sticker"]);
 const connectorTypes = new Set(["line", "arrow"]);
-const workspaceBoardPrefix = "codex-miro-plane";
-const PLANE_FILE = "codex-miro-plane.json";
-const TABS_STORAGE_KEY = "codex-miro-tabs-v1";
-const FOLDER_DB_NAME = "codex-miro-folders";
+// Plane file is named zmtki-plane.json; legacy codex-miro-plane*.json files are
+// still opened for back-compat when a zmtki file is not present.
+const workspaceBoardPrefix = "zmtki-plane";
+const LEGACY_BOARD_PREFIX = "codex-miro-plane";
+const PLANE_FILE = "zmtki-plane.json";
+const LEGACY_PLANE_FILE = "codex-miro-plane.json";
+const TABS_STORAGE_KEY = "zmtki-tabs-v1";
+const FOLDER_DB_NAME = "zmtki-folders";
 const SERVER_DEFAULT_TAB_ID = "server-default";
 const CARD_ASPECT = 2 / 3;
 const GRADIENT_PRESETS = {
@@ -85,11 +91,12 @@ const defaults = {
   arrow: { width: 180, height: 0, fill: "transparent" },
   image: { width: 240, height: 160, fill: "transparent", stroke: "transparent", strokeWidth: 0 },
   card: { width: 200, height: 300, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1, text: "# Карточка\n\nДважды кликните, чтобы открыть редактор." },
-  file: { width: 150, height: 132, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1, text: "" }
+  file: { width: 150, height: 132, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1, text: "" },
+  sticker: { width: 120, height: 120, fill: "transparent", stroke: "transparent", strokeWidth: 0, text: "" }
 };
 
 init().catch((error) => {
-  console.error("Codex Miro init failed:", error);
+  console.error("zmtki init failed:", error);
   applyMode("canvas");
   syncLabel.textContent = "Ошибка запуска";
   render();
@@ -555,6 +562,12 @@ function connectEvents() {
     });
     es.addEventListener("workspace:changed", scheduleRemoteReload);
     es.addEventListener("board:update", scheduleRemoteReload);
+    es.addEventListener("llm-context:changed", (event) => {
+      try {
+        const data = JSON.parse(event.data || "{}");
+        updateContextButton(data.count ?? 0);
+      } catch { /* ignore */ }
+    });
     es.onerror = () => {
       es.close();
       setTimeout(open, retryMs);
@@ -566,13 +579,42 @@ function connectEvents() {
   open();
   startBoardPolling();
   pollServerRevision();
+  refreshLlmContextCount();
 
   window.addEventListener("focus", () => {
     applyRemoteReload({ force: true });
+    refreshLlmContextCount();
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) applyRemoteReload({ force: true });
+    if (!document.hidden) {
+      applyRemoteReload({ force: true });
+      refreshLlmContextCount();
+    }
   });
+}
+
+// Reflect the current LLM-context buffer size on the toolbar button.
+function updateContextButton(count) {
+  if (!addToContextBtn) return;
+  if (count > 0) {
+    addToContextBtn.classList.add("has-buffer");
+    addToContextBtn.title = `В буфере LLM: ${count} шт. Добавьте ещё или дождитесь, пока агент заберёт.`;
+    addToContextBtn.textContent = `🧠 В контексте: ${count}`;
+  } else {
+    addToContextBtn.classList.remove("has-buffer");
+    addToContextBtn.title = "Добавить выделение в контекст LLM (Shift+клик — очистить буфер)";
+    addToContextBtn.textContent = "🧠 В контекст";
+  }
+}
+
+async function refreshLlmContextCount() {
+  if (state.boardKind !== "server") return;
+  try {
+    const res = await fetch("/api/llm-context?peek=1", { cache: "no-store" });
+    if (!res.ok) return;
+    const payload = await res.json();
+    updateContextButton(payload.count || 0);
+  } catch { /* server offline */ }
 }
 
 function boardSignature(board) {
@@ -718,8 +760,34 @@ function publishApp() {
       saveBoard();
       render();
       if (state.mode === "docs") Docs.renderCatalog();
-    }
+    },
+    // Task 6: stamp a sticker onto the plane. worldPoint is optional; when null
+    // the sticker lands at the current screen center.
+    placeSticker: (sticker, worldPoint) => placeStickerElement(sticker, worldPoint)
   };
+}
+
+function placeStickerElement(sticker, worldPoint) {
+  if (!sticker || !sticker.url) return;
+  const point = worldPoint || screenToWorld({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const element = createElement("sticker", point);
+  element.url = sticker.url;
+  element.text = sticker.label || "";
+  element.meta = {
+    ...(element.meta || {}),
+    packId: sticker.packId || "",
+    stickerId: sticker.id || "",
+    sourceFile: sticker.sourceFile || ""
+  };
+  // Stickers drop centered on the pointer so the cursor marks the stamp spot.
+  element.x -= element.width / 2;
+  element.y -= element.height / 2;
+  pushHistory();
+  state.board.elements.push(element);
+  setSelection([element.id]);
+  saveBoard();
+  render();
+  return element;
 }
 
 function createCardElement() {
@@ -886,14 +954,16 @@ async function resolvePlaneFileHandle(dirHandle, files) {
   const exact = files.find((handle) => handle.name === PLANE_FILE);
   if (exact) return exact;
   const legacy = files
-    .filter((handle) => handle.name.startsWith(workspaceBoardPrefix) && handle.name.endsWith(".json"))
+    .filter((handle) => (handle.name.startsWith(workspaceBoardPrefix) || handle.name.startsWith(LEGACY_BOARD_PREFIX)) && handle.name.endsWith(".json"))
     .sort((a, b) => b.name.localeCompare(a.name));
   if (legacy.length) return legacy[0];
   return dirHandle.getFileHandle(PLANE_FILE, { create: true });
 }
 
 function isPlaneFileName(name) {
-  return name === PLANE_FILE || (name.startsWith(workspaceBoardPrefix) && name.endsWith(".json"));
+  return name === PLANE_FILE || name === LEGACY_PLANE_FILE
+    || (name.startsWith(workspaceBoardPrefix) && name.endsWith(".json"))
+    || (name.startsWith(LEGACY_BOARD_PREFIX) && name.endsWith(".json"));
 }
 
 async function registerWorkspaceAssets(files) {
@@ -930,6 +1000,10 @@ function hydrateElementUrls(elements) {
         element.meta.image = state.workspace.assetUrls.get(imageFile);
         element.meta.imageFile = imageFile;
       }
+    }
+    if (element.type === "sticker" && element.meta?.sourceFile) {
+      const url = state.workspace.assetUrls.get(element.meta.sourceFile);
+      if (url) element.url = url;
     }
   }
 }
@@ -982,9 +1056,13 @@ async function syncWorkspaceFromFolder({ merge = false } = {}) {
     const imageFile = imageRef && state.workspace.assetUrls.has(imageRef) ? imageRef : "";
     const existing = bySource.get(handle.name);
     const point = existing ? { x: existing.x, y: existing.y } : layoutPoint(index++);
+    // NOTE: keep the generated id when the element is new. Spreading `{ id: existing?.id }`
+    // used to clobber a fresh element's id with `undefined`, which left it unselectable
+    // and immovable on the plane. Only reuse the old id if it actually exists.
     const card = existing && existing.type === "card"
       ? existing
-      : { ...createElement("card", point), id: existing?.id };
+      : createElement("card", point);
+    if (existing && existing.type !== "card") card.id = existing.id;
     card.x = point.x;
     card.y = point.y;
     if (existing) {
@@ -1013,7 +1091,8 @@ async function syncWorkspaceFromFolder({ merge = false } = {}) {
     const point = existing ? { x: existing.x, y: existing.y } : layoutPoint(index++);
     const image = existing && existing.type === "image"
       ? existing
-      : { ...createElement("image", point), id: existing?.id };
+      : createElement("image", point);
+    if (existing && existing.type !== "image") image.id = existing.id;
     image.x = point.x;
     image.y = point.y;
     if (existing) {
@@ -1037,7 +1116,8 @@ async function syncWorkspaceFromFolder({ merge = false } = {}) {
     const point = existing ? { x: existing.x, y: existing.y } : layoutPoint(index++);
     const fileEl = existing && existing.type === "file"
       ? existing
-      : { ...createElement("file", point), id: existing?.id };
+      : createElement("file", point);
+    if (existing && existing.type !== "file") fileEl.id = existing.id;
     fileEl.x = point.x;
     fileEl.y = point.y;
     if (existing) {
@@ -1081,6 +1161,22 @@ function setPlaneHiddenForSelection(hidden) {
   saveBoard();
   render();
   if (state.mode === "docs") Docs.renderCatalog();
+}
+
+// Task 1: switch how the selected card(s) render on the plane.
+// mode = "auto" | "header" | "content".
+function setCardPlaneView(mode) {
+  const ids = selectedIds();
+  const cards = ids
+    .map((id) => state.board.elements.find((e) => e.id === id))
+    .filter((e) => e && e.type === "card");
+  if (!cards.length) return;
+  pushHistory();
+  for (const card of cards) {
+    card.meta = { ...(card.meta || {}), planeView: mode };
+  }
+  saveBoard();
+  render();
 }
 
 function revokeWorkspaceUrls() {
@@ -1182,6 +1278,55 @@ function wireToolbar() {
   gradientPicker?.querySelectorAll("[data-grad]").forEach((btn) => {
     btn.addEventListener("click", () => applyGradientPreset(btn.dataset.grad));
   });
+  planeViewSelect?.addEventListener("change", () => setCardPlaneView(planeViewSelect.value));
+  addToContextBtn?.addEventListener("click", (event) => {
+    if (event.shiftKey) clearLlmContextBuffer();
+    else addSelectionToLlmContext();
+  });
+}
+
+async function clearLlmContextBuffer() {
+  try {
+    await fetch("/api/llm-context/clear", { method: "POST" });
+    updateContextButton(0);
+    flashSyncLabel("Контекст очищен");
+  } catch { /* ignore */ }
+}
+
+// Task 3: push the current selection into the shared LLM-context buffer.
+async function addSelectionToLlmContext() {
+  const ids = selectedIds();
+  if (!ids.length) return;
+  const items = ids
+    .map((id) => state.board.elements.find((e) => e.id === id))
+    .filter(Boolean)
+    .map((e) => ({
+      id: e.id,
+      kind: e.type,
+      title: e.meta?.title || e.meta?.fileName || e.text || "",
+      text: e.type === "card" ? (e.text || "") : (e.text || ""),
+      meta: e.meta || null
+    }));
+  try {
+    const res = await fetch("/api/llm-context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items })
+    });
+    if (res.ok) {
+      const payload = await res.json();
+      const count = payload.count || items.length;
+      flashSyncLabel(`🧠 В контексте: ${count}`);
+      if (addToContextBtn) {
+        addToContextBtn.classList.add("has-buffer");
+        addToContextBtn.title = `В буфере LLM: ${count}. Отправьте выделение ещё раз, чтобы добавить.`;
+      }
+    } else {
+      flashSyncLabel("Не удалось добавить в контекст");
+    }
+  } catch {
+    flashSyncLabel("Сервер недоступен");
+  }
 }
 
 // Switch the selected connector's routing (straight / elbow / orthogonal).
@@ -1215,6 +1360,20 @@ function wireStage() {
     if (state.tool === "select" || state.tool === "pan" || state.spaceHeld) event.preventDefault();
   });
   svg.addEventListener("dragstart", (event) => event.preventDefault());
+  // Task 6: accept sticker drops from the sticker panel onto the canvas.
+  svg.addEventListener("dragover", (event) => {
+    if (Array.from(event.dataTransfer?.types || []).includes("application/x-zmtki-sticker")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  });
+  svg.addEventListener("drop", (event) => {
+    if (!event.dataTransfer) return;
+    if (!Array.from(event.dataTransfer.types).includes("application/x-zmtki-sticker")) return;
+    event.preventDefault();
+    const point = pointerWorld(event);
+    window.Stickers?.handleCanvasDrop?.(event, point);
+  });
   svg.addEventListener("wheel", onWheel, { passive: false });
   svg.addEventListener("dblclick", onDoubleClick);
   window.addEventListener("resize", () => {
@@ -1332,6 +1491,17 @@ function render() {
       }
     });
   }
+  if (planeViewSelect) {
+    // Show the plane-view dropdown only when at least one selected element is a card.
+    const selectedCards = selectedIds()
+      .map((id) => state.board.elements.find((e) => e.id === id))
+      .filter((e) => e && e.type === "card");
+    planeViewSelect.hidden = selectedCards.length === 0;
+    if (selectedCards.length) {
+      // Reflect the primary card's mode (fall back to auto for mixed selections).
+      planeViewSelect.value = selectedCards[0].meta?.planeView || "auto";
+    }
+  }
   positionEditor();
 }
 
@@ -1374,6 +1544,17 @@ function renderElement(element, isSelected = element.id === state.selectedId) {
       width: element.width,
       height: element.height,
       preserveAspectRatio: fillBox ? "none" : "xMidYMid meet"
+    });
+    image.setAttributeNS(xlinkns, "href", element.url || "");
+    image.setAttribute("href", element.url || "");
+    group.append(image);
+  } else if (element.type === "sticker") {
+    const image = el("image", {
+      x: 0,
+      y: 0,
+      width: Math.max(1, element.width),
+      height: Math.max(1, element.height),
+      preserveAspectRatio: "xMidYMid meet"
     });
     image.setAttributeNS(xlinkns, "href", element.url || "");
     image.setAttribute("href", element.url || "");
@@ -1788,7 +1969,9 @@ function textForeignObject(element, className) {
   return fo;
 }
 
-// Card renders a portrait header (2:3) on the board. Markdown body lives in the editor.
+// Card renders either a portrait header (2:3) or the scaled-down markdown body,
+// depending on meta.planeView. "auto" = header when a header is configured, else
+// the markdown content; "header"/"content" force one or the other.
 function cardForeignObject(element) {
   const fo = el("foreignObject", {
     x: 0,
@@ -1796,41 +1979,52 @@ function cardForeignObject(element) {
     width: Math.max(1, element.width),
     height: Math.max(1, element.height)
   });
-  const body = document.createElement("div");
-  body.className = "card-body card-portrait";
   const meta = element.meta || {};
+  const hasHeader = Boolean(meta.image || meta.title || meta.caption);
+  const mode = meta.planeView === "header" ? "header"
+    : meta.planeView === "content" ? "content"
+    : (hasHeader ? "header" : "content");
 
+  const body = document.createElement("div");
+  body.className = mode === "header" ? "card-body card-portrait" : "card-body card-content";
   body.style.background = cssFill(element);
   const sw = Math.max(0, Number(element.strokeWidth) || 0);
   body.style.border = sw > 0 ? `${sw}px solid ${element.stroke || "#cbd5e1"}` : "none";
   body.style.borderRadius = "12px";
 
-  const photo = document.createElement("div");
-  photo.className = "card-portrait-photo";
-  if (meta.image) {
-    const img = document.createElement("img");
-    img.src = meta.image;
-    img.alt = "";
-    img.draggable = false;
-    photo.append(img);
-  }
-  body.append(photo);
+  if (mode === "header") {
+    const photo = document.createElement("div");
+    photo.className = "card-portrait-photo";
+    if (meta.image) {
+      const img = document.createElement("img");
+      img.src = meta.image;
+      img.alt = "";
+      img.draggable = false;
+      photo.append(img);
+    }
+    body.append(photo);
 
-  const info = document.createElement("div");
-  info.className = "card-portrait-info";
-  if (meta.title) {
-    const title = document.createElement("div");
-    title.className = "card-title";
-    title.textContent = meta.title;
-    info.append(title);
+    const info = document.createElement("div");
+    info.className = "card-portrait-info";
+    if (meta.title) {
+      const title = document.createElement("div");
+      title.className = "card-title";
+      title.textContent = meta.title;
+      info.append(title);
+    }
+    if (meta.caption) {
+      const caption = document.createElement("div");
+      caption.className = "card-caption";
+      caption.textContent = meta.caption;
+      info.append(caption);
+    }
+    body.append(info);
+  } else {
+    const md = document.createElement("div");
+    md.className = "card-md";
+    md.innerHTML = renderCardMd(element.text || "");
+    body.append(md);
   }
-  if (meta.caption) {
-    const caption = document.createElement("div");
-    caption.className = "card-caption";
-    caption.textContent = meta.caption;
-    info.append(caption);
-  }
-  body.append(info);
 
   fo.append(body);
   return fo;
@@ -2484,6 +2678,11 @@ function createElement(type, point) {
     element.stroke = "transparent";
     element.strokeWidth = 0;
     element.meta = { sourceFile: "", fit: "contain" };
+  }
+  if (type === "sticker") {
+    element.stroke = "transparent";
+    element.strokeWidth = 0;
+    element.meta = { packId: "", stickerId: "", sourceFile: "" };
   }
   if (!["sticky", "frame", "text", "image", "card", "file"].includes(type)) element.fill = state.style.fill;
   if (connectorTypes.has(type) || type === "pen") {

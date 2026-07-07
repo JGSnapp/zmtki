@@ -13,6 +13,11 @@ import {
   updateBoard,
   writeBoard,
   getWorkspaceDir,
+  appendLlmContext,
+  replaceLlmContext,
+  readLlmContext,
+  consumeLlmContext,
+  clearLlmContext,
   PLANE_FILE,
   NOTIFY_FILE
 } from "./store.js";
@@ -51,7 +56,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Codex Miro is running at http://${host}:${port}`);
+  console.log(`zmtki is running at http://${host}:${port}`);
   console.log(`Workspace: ${getWorkspaceDir()}`);
 });
 
@@ -235,6 +240,50 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/notify") {
     broadcast("workspace:changed", { ts: Date.now(), source: "notify" });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/llm-context") {
+    const body = await readBody(req);
+    let items = [];
+    if (Array.isArray(body.items)) {
+      items = body.items
+        .filter((it) => it && (typeof it === "object"))
+        .map((it) => ({
+          id: String(it.id || `item_${Date.now().toString(36)}`),
+          kind: String(it.kind || "element"),
+          title: String(it.title || ""),
+          text: String(it.text || ""),
+          meta: it.meta || null
+        }));
+    } else if (Array.isArray(body.ids)) {
+      // Resolve ids against the current board so the client can send just ids.
+      const board = await readBoard();
+      const wanted = new Set(body.ids.map(String));
+      items = board.elements
+        .filter((e) => wanted.has(String(e.id)))
+        .map((e) => elementToContextItem(e));
+    }
+    let count;
+    if (items.length && body.replace) count = await replaceLlmContext(items);
+    else if (items.length) count = await appendLlmContext(items);
+    else count = (await readLlmContext()).length;
+    broadcast("llm-context:changed", { count });
+    sendJson(res, 200, { ok: true, count });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/llm-context") {
+    const peek = url.searchParams.get("peek") === "1" || url.searchParams.get("peek") === "true";
+    const items = await consumeLlmContext({ peek });
+    sendJson(res, 200, { count: items.length, items });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/llm-context/clear") {
+    await clearLlmContext();
+    broadcast("llm-context:changed", { count: 0 });
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -435,6 +484,28 @@ async function readBody(req) {
 function sendJson(res, status, payload) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+// Compress a board element into a compact, LLM-friendly context item: keep the
+// text-heavy fields and drop pure presentation (fill/stroke/points/…).
+function elementToContextItem(element) {
+  const e = element || {};
+  const meta = e.meta && typeof e.meta === "object" ? e.meta : {};
+  const item = {
+    id: String(e.id || ""),
+    kind: String(e.type || e.kind || "element"),
+    title: String(meta.title || meta.fileName || ""),
+    text: String(e.text || ""),
+    meta: null
+  };
+  // Keep just the descriptive bits of meta, not geometry/layout flags.
+  const pickedMeta = {};
+  if (meta.caption) pickedMeta.caption = meta.caption;
+  if (meta.sourceFile) pickedMeta.sourceFile = meta.sourceFile;
+  if (meta.image) pickedMeta.image = meta.image;
+  if (e.url) pickedMeta.url = e.url;
+  if (Object.keys(pickedMeta).length) item.meta = pickedMeta;
+  return item;
 }
 
 function broadcast(event, payload) {

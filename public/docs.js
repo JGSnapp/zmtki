@@ -41,6 +41,7 @@
     { kind: "quote", glyph: "❝", label: "Цитата", desc: "> " },
     { kind: "code", glyph: "</>", label: "Код", desc: "```" },
     { kind: "table", glyph: "▦", label: "Таблица", desc: "| a | b |" },
+    { kind: "image", glyph: "🖼", label: "Изображение", desc: "![](url)" },
     { kind: "divider", glyph: "—", label: "Разделитель", desc: "---" }
   ];
 
@@ -101,6 +102,55 @@
       // Hide slash menu on outside click; keep fmt bar (managed by selection).
       if (!slashMenu.contains(e.target)) hideSlash();
     });
+
+    // Image paste/drop into the editor (Task 4). Pasted or dropped image files
+    // become new image blocks inserted after the currently-focused block.
+    blocksEl.addEventListener("paste", (e) => onEditorPaste(e));
+    blocksEl.addEventListener("dragover", (e) => {
+      if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
+        e.preventDefault();
+      }
+    });
+    blocksEl.addEventListener("drop", (e) => onEditorDrop(e));
+  }
+
+  function currentBlockIndexFromEvent(e) {
+    const row = e.target?.closest?.(".block-row");
+    if (row) return Number(row.dataset.index);
+    return blocks.length - 1;
+  }
+
+  async function ingestImageFiles(files, afterIndex) {
+    let idx = afterIndex;
+    for (const file of Array.from(files || [])) {
+      if (!file.type.startsWith("image/")) continue;
+      try {
+        const res = App().saveAssetFile ? await App().saveAssetFile(file) : await uploadRaw(file);
+        if (res && res.url) {
+          insertImageBlockAfter(idx, { url: res.url, alt: res.fileName || file.name || "" });
+          idx += 1;
+        }
+      } catch {
+        // skip a failed file, keep going with the rest
+      }
+    }
+  }
+
+  function onEditorPaste(e) {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter((it) => it.kind === "file" && it.type.startsWith("image/"));
+    if (!imageItems.length) return;
+    e.preventDefault();
+    const after = currentBlockIndexFromEvent(e);
+    const files = imageItems.map((it) => it.getAsFile()).filter(Boolean);
+    ingestImageFiles(files, after);
+  }
+
+  function onEditorDrop(e) {
+    const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    ingestImageFiles(files, currentBlockIndexFromEvent(e));
   }
 
   // ---------- floating format bar (Task 3) ----------
@@ -420,6 +470,9 @@
       content.contentEditable = "false";
     } else if (block.kind === "table") {
       content.append(renderTable(block, index));
+    } else if (block.kind === "image") {
+      content.contentEditable = "false";
+      content.append(renderImageBlock(block, index));
     } else if (block.kind === "todo") {
       content.contentEditable = "false";
       const box = document.createElement("span");
@@ -536,6 +589,103 @@
       rows.push(cells);
     }
     block.rows = rows;
+  }
+
+  // ---------- image blocks (Task 4) ----------
+  // An image block stores { kind: "image", url, alt, title }. The editor renders
+  // a preview plus upload/replace/remove controls. Pasting or dropping an image
+  // file inserts a new image block right after the current one.
+  function renderImageBlock(block, index) {
+    const wrap = document.createElement("div");
+    wrap.className = "image-block";
+    if (block.url) {
+      const img = document.createElement("img");
+      img.className = "image-block-img";
+      img.src = block.url;
+      img.alt = block.alt || "";
+      if (block.title) img.title = block.title;
+      img.addEventListener("click", () => openImageLightbox(block.url, block.alt || block.title || ""));
+      wrap.append(img);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "image-block-empty";
+      placeholder.textContent = "Изображение не задано";
+      wrap.append(placeholder);
+    }
+    const controls = document.createElement("div");
+    controls.className = "image-block-controls";
+    const upload = document.createElement("button");
+    upload.type = "button";
+    upload.textContent = block.url ? "Заменить файл" : "📎 Загрузить файл";
+    upload.addEventListener("click", () => pickImageFile((file) => uploadImageBlockFile(block, file, index)));
+    const urlBtn = document.createElement("button");
+    urlBtn.type = "button";
+    urlBtn.textContent = "Ссылка";
+    urlBtn.title = "Вставить изображение по URL";
+    urlBtn.addEventListener("click", () => {
+      const url = prompt("Адрес изображения:", block.url || "https://");
+      if (url == null) return;
+      block.url = url.trim();
+      block.alt = block.alt || "";
+      rerenderBlock(index, "keep");
+      schedulePersist();
+    });
+    const altBtn = document.createElement("button");
+    altBtn.type = "button";
+    altBtn.textContent = "Описание";
+    altBtn.title = "Подпись (alt)";
+    altBtn.addEventListener("click", () => {
+      const alt = prompt("Описание (alt):", block.alt || "");
+      if (alt == null) return;
+      block.alt = alt;
+      rerenderBlock(index, "keep");
+      schedulePersist();
+    });
+    controls.append(upload, urlBtn, altBtn);
+    wrap.append(controls);
+    return wrap;
+  }
+
+  function pickImageFile(cb) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (file) cb(file);
+    });
+    input.click();
+  }
+
+  async function uploadImageBlockFile(block, file, index) {
+    try {
+      const res = App().saveAssetFile ? await App().saveAssetFile(file) : await uploadRaw(file);
+      if (res && res.url) {
+        block.url = res.url;
+        if (!block.alt) block.alt = (res.fileName || file.name || "").replace(/\.[^.]+$/, "");
+        rerenderBlock(index, "keep");
+        schedulePersist();
+      } else {
+        alert("Не удалось сохранить изображение.");
+      }
+    } catch {
+      alert("Ошибка загрузки изображения.");
+    }
+  }
+
+  // Fallback upload when running on the server board (no folder handle).
+  function uploadRaw(file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch("/api/upload", { method: "POST", body: fd }).then((r) => r.json());
+  }
+
+  // Insert a new image block after `index`, using an already-resolved url.
+  function insertImageBlockAfter(index, { url, alt = "", fileName = "" }) {
+    blocks.splice(index + 1, 0, { kind: "image", url, alt: alt || fileName || "", title: "" });
+    renderBlocks();
+    focusBlock(index + 1, "keep");
+    schedulePersist();
   }
 
   function textNode(row) {
@@ -776,6 +926,12 @@
       };
       rerenderBlock(slashState.blockIndex, "keep");
       schedulePersist();
+    } else if (item.kind === "image") {
+      blocks[slashState.blockIndex] = { kind: "image", url: "", alt: "", title: "" };
+      rerenderBlock(slashState.blockIndex, "keep");
+      schedulePersist();
+      // immediately prompt for a file so the user doesn't have to hunt for the button
+      pickImageFile((file) => uploadImageBlockFile(blocks[slashState.blockIndex], file, slashState.blockIndex));
     } else {
       setBlockKind(slashState.blockIndex, item.kind, "");
     }
