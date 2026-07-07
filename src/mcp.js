@@ -1,4 +1,6 @@
 import { appendFileSync } from "node:fs";
+import path from "node:path";
+import { promises as fs } from "node:fs";
 import {
   ensureDataFile,
   getWorkspaceDir,
@@ -14,8 +16,11 @@ import {
   writeBoard,
   readLlmContext,
   consumeLlmContext,
-  clearLlmContext
+  clearLlmContext,
+  readChat,
+  appendChatMessage
 } from "./store.js";
+import { runAgent, regionSnapshot } from "./agent.js";
 
 await ensureDataFile();
 debugLog("server started");
@@ -273,6 +278,105 @@ const tools = [
       properties: {},
       additionalProperties: false
     }
+  },
+  {
+    name: "get_agents",
+    description: "List every agent element on the board with its id, name, working-field rectangle, status and provider/model. Useful for an external agent to know who else is on the plane.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
+    name: "board_overview",
+    description: "Return a high-level overview of the whole board: element counts by type plus compact lists of all agents and cards with positions and titles. Use this to orient yourself before calling create_element/select_in_area.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
+    name: "run_agent",
+    description: "Kick off a built-in LangGraph agent by id with a natural-language instruction. Returns immediately (the agent runs asynchronously and reports back into its chat channel + by moving/editing elements).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agentId: { type: "string", description: "The agent element id to run." },
+        input: { type: "string", description: "Natural-language instruction for the agent." }
+      },
+      required: ["agentId", "input"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "list_files",
+    description: "List files in the workspace folder (optionally filtered by extension).",
+    inputSchema: {
+      type: "object",
+      properties: { extension: { type: "string", description: "e.g. md, json" } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "search_files",
+    description: "Search text file contents in the workspace folder for a query string.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "read_file",
+    description: "Read a text file from the workspace folder by name.",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "write_file",
+    description: "Write (create or overwrite) a text file in the workspace folder.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        content: { type: "string" }
+      },
+      required: ["name", "content"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "read_chat",
+    description: "Read recent chat messages from the shared or per-agent channels.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "general, * or an agent id." },
+        limit: { type: "number" }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "send_chat",
+    description: "Post a message to a chat channel (general or agent id).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string" },
+        text: { type: "string" },
+        author: { type: "string" }
+      },
+      required: ["text"],
+      additionalProperties: false
+    }
   }
 ];
 
@@ -512,6 +616,104 @@ const handlers = {
   async clear_llm_context() {
     await clearLlmContext();
     return { ok: true, count: 0 };
+  },
+
+  async get_agents() {
+    const board = await readBoard();
+    const agents = board.elements
+      .filter((e) => e.type === "agent")
+      .map((e) => ({
+        id: e.id,
+        name: e.meta?.name || "Agent",
+        field: { x: e.x, y: e.y, width: e.width, height: e.height },
+        status: e.meta?.status || "idle",
+        providerId: e.meta?.providerId || "",
+        model: e.meta?.model || "",
+        lastError: e.meta?.lastError || ""
+      }));
+    return { count: agents.length, agents };
+  },
+
+  async board_overview() {
+    const board = await readBoard();
+    const counts = {};
+    const agents = [];
+    const cards = [];
+    for (const e of board.elements) {
+      counts[e.type] = (counts[e.type] || 0) + 1;
+      if (e.type === "agent") agents.push({ id: e.id, name: e.meta?.name || "Agent", x: e.x, y: e.y, w: e.width, h: e.height, status: e.meta?.status });
+      if (e.type === "card") cards.push({ id: e.id, title: e.meta?.title || "", x: e.x, y: e.y });
+    }
+    return { counts, agents, cards: cards.slice(0, 80) };
+  },
+
+  async run_agent(args) {
+    const agentId = String(args.agentId || "");
+    const input = String(args.input || "");
+    if (!agentId) throw new Error("agentId is required");
+    runAgent(agentId, { input, snapshotRenderer: regionSnapshot }).catch((error) => console.error("run_agent:", error));
+    return { ok: true, queued: true, agentId };
+  },
+
+  async list_files(args = {}) {
+    const dir = getWorkspaceDir();
+    const entries = await safeReadDir(dir);
+    const filtered = entries.filter((name) => !name.startsWith(".zmtki"));
+    const ext = String(args.extension || "").toLowerCase().replace(/^\./, "");
+    const out = ext ? filtered.filter((n) => n.toLowerCase().endsWith("." + ext)) : filtered;
+    return { count: out.length, files: out.slice(0, 200) };
+  },
+
+  async search_files(args) {
+    const q = String(args.query || "").toLowerCase();
+    if (!q) throw new Error("query is required");
+    const dir = getWorkspaceDir();
+    const files = (await safeReadDir(dir)).filter((n) => /\.(md|txt|json|js|css|html|toml|yml|yaml)$/i.test(n));
+    const hits = [];
+    for (const name of files.slice(0, 80)) {
+      try {
+        const text = (await fs.readFile(path.join(dir, name), "utf8")).toLowerCase();
+        const idx = text.indexOf(q);
+        if (idx >= 0) hits.push({ file: name, snippet: text.slice(Math.max(0, idx - 40), idx + 80) });
+      } catch { /* ignore */ }
+    }
+    return { count: hits.length, hits };
+  },
+
+  async read_file(args) {
+    const dir = getWorkspaceDir();
+    const target = resolveWithin(dir, String(args.name || ""));
+    if (!target) throw new Error("invalid file name");
+    let text = await fs.readFile(target, "utf8");
+    if (text.length > 16000) text = text.slice(0, 16000) + "\n…(truncated)";
+    return { name: args.name, content: text };
+  },
+
+  async write_file(args) {
+    const dir = getWorkspaceDir();
+    const target = resolveWithin(dir, String(args.name || ""));
+    if (!target) throw new Error("invalid file name");
+    await fs.writeFile(target, String(args.content || ""), "utf8");
+    return { ok: true, name: args.name };
+  },
+
+  async read_chat(args = {}) {
+    const all = await readChat();
+    const channel = String(args.channel || "general");
+    const filtered = all
+      .filter((m) => channel === "*" || m.channel === channel)
+      .slice(-(Number(args.limit) || 20));
+    return { channel, count: filtered.length, messages: filtered };
+  },
+
+  async send_chat(args) {
+    const msg = await appendChatMessage({
+      channel: String(args.channel || "general"),
+      role: "user",
+      author: String(args.author || "mcp"),
+      text: String(args.text || "")
+    });
+    return { ok: true, id: msg.id };
   }
 };
 
@@ -826,4 +1028,15 @@ function areaHitBounds(board, element) {
     width: b.width + pad * 2,
     height: b.height + pad * 2
   };
+}
+
+async function safeReadDir(dir) {
+  try { return await fs.readdir(dir); } catch { return []; }
+}
+
+function resolveWithin(dir, name) {
+  const clean = String(name || "").replace(/[\\/]+/g, path.sep).replace(/^[/\\]+/, "");
+  const full = path.resolve(dir, clean);
+  if (full !== dir && !full.startsWith(dir + path.sep)) return null;
+  return full;
 }

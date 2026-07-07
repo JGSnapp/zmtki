@@ -30,6 +30,7 @@
         <button class="tool" data-tool="pen" title="Pen">⌁</button>
         <button class="tool" id="imageBtn" title="Image">▧</button>
         <button class="tool" id="stickerBtn" title="Стикеры">★</button>
+        <button class="tool" data-tool="agent" title="Агент (LLM с рабочим полем)">🤖</button>
       </aside>
 
       <header class="topbar">
@@ -85,7 +86,20 @@
             <option value="header">Вид: шапка</option>
             <option value="content">Вид: текст</option>
           </select>
+          <div id="agentToolbar" class="agent-toolbar" hidden>
+            <input id="agentNameInput" type="text" placeholder="Имя агента" title="Имя агента">
+            <select id="agentProviderSelect" title="Провайдер LLM"></select>
+            <input id="agentModelInput" type="text" placeholder="Модель" title="Модель (переопределение)">
+            <input id="agentPromptInput" type="text" placeholder="System prompt" title="Системный промпт агента">
+            <label class="agent-field-toggle" title="Показывать контур рабочего поля">
+              <input id="agentFieldVisible" type="checkbox" checked> Поле
+            </label>
+            <button type="button" id="agentRunBtn" title="Запустить агента">▶</button>
+            <button type="button" id="agentOpenChatBtn" title="Чат с агентом">💬</button>
+          </div>
           <button id="addToContextBtn" title="Добавить выделение в контекст LLM">🧠 В контекст</button>
+          <button id="agentsChatBtn" title="Чат с агентами">💬</button>
+          <button id="settingsBtn" title="Настройки провайдеров LLM">⚙</button>
           <button id="fileBtn" title="Рабочая папка">Файл</button>
           <button id="openFolderBtn" title="Открыть в проводнике">Проводник</button>
           <button id="reloadBtn" title="Подгрузить изменения из папки">Обновить</button>
@@ -207,12 +221,56 @@
       <input id="stickerFileInput" type="file" accept="image/*" multiple hidden>
     </aside>
 
+    <!-- ===== AGENT CHAT PANEL ===== -->
+    <aside class="agent-panel" id="agentPanel" hidden>
+      <header class="agent-head">
+        <span>Чат с агентами</span>
+        <div class="agent-head-actions">
+          <button type="button" id="agentRefreshBtn" title="Обновить">↻</button>
+          <button type="button" id="agentCloseBtn" title="Закрыть">✕</button>
+        </div>
+      </header>
+      <div class="agent-channels" id="agentChannels">
+        <!-- channel buttons injected at runtime -->
+      </div>
+      <div class="agent-pick" id="agentPickRow" hidden></div>
+      <div class="agent-log" id="agentLog"></div>
+      <form class="agent-compose" id="agentCompose">
+        <select id="agentTargetSelect" title="Кому адресовать сообщение / кого запустить"></select>
+        <input id="agentComposeInput" type="text" placeholder="Сообщение или инструкция агенту…" autocomplete="off">
+        <button type="submit" id="agentSendBtn">▶</button>
+      </form>
+    </aside>
+
+    <!-- ===== PROVIDER SETTINGS MODAL ===== -->
+    <div class="modal-backdrop" id="settingsModal" hidden>
+      <div class="modal settings-modal" role="dialog" aria-modal="true" aria-label="Провайдеры LLM">
+        <header class="modal-head">
+          <span>Провайдеры LLM</span>
+          <button id="settingsModalClose" title="Закрыть">✕</button>
+        </header>
+        <div class="modal-body" id="settingsBody">
+          <div class="settings-providers" id="settingsProviders"></div>
+          <button type="button" id="settingsAddProviderBtn" class="link-btn">+ Добавить провайдер</button>
+          <p class="modal-hint">Ключи хранятся локально в <code>.zmtki-providers.json</code> рабочей папки сервера. Для OAuth Codex используйте тип <code>codex</code> и совместимый OpenAI-эндпоинт с bearer-токеном.</p>
+        </div>
+        <footer class="modal-foot">
+          <span class="settings-active-row">
+            Активный:
+            <select id="settingsActiveSelect"></select>
+          </span>
+          <button id="settingsApply" class="primary">Сохранить</button>
+        </footer>
+      </div>
+    </div>
+
     <input id="headerFileInput" type="file" accept="image/*" hidden>
     <input id="imageInput" type="file" accept="image/*" hidden>
     <input id="importInput" type="file" accept="application/json,.json" hidden>
     <script src="/markdown.js"></script>
     <script src="/docs.js"></script>
     <script src="/stickers.js"></script>
+    <script src="/agents.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

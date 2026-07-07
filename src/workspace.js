@@ -25,6 +25,11 @@ const PLANE_PREFIX = "zmtki-plane";
 const LEGACY_PLANE_PREFIX = "codex-miro-plane";
 const LEGACY_PLANE_FILE = "codex-miro-plane.json";
 export const LLM_CONTEXT_FILE = ".zmtki-llm-context.json";
+// Agent runtime artifacts live in a hidden subfolder so they don't clutter the
+// workspace but still share the same WORKSPACE_DIR across server + MCP.
+export const AGENTS_DIR = ".zmtki-agents";
+export const AGENTS_CHAT_FILE = "chat.json";        // shared chat log
+export const PROVIDERS_FILE = ".zmtki-providers.json";
 
 let notifyTimer = null;
 export function touchWorkspaceNotify() {
@@ -172,7 +177,8 @@ const TYPE_DEFAULTS = {
   card: { width: 260, height: 180, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1 },
   file: { width: 150, height: 132, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1 },
   image: { width: 240, height: 160, fill: "transparent" },
-  sticker: { width: 120, height: 120, fill: "transparent", stroke: "transparent", strokeWidth: 0 }
+  sticker: { width: 120, height: 120, fill: "transparent", stroke: "transparent", strokeWidth: 0 },
+  agent: { width: 560, height: 420, fill: "#0f172a", stroke: "#22d3ee", strokeWidth: 1 }
 };
 
 export function normalizeElement(input = {}) {
@@ -236,6 +242,24 @@ function normalizeMeta(meta, type) {
       packId: str(base.packId, ""),
       stickerId: str(base.stickerId, ""),
       sourceFile: str(base.sourceFile, ""),
+      planeHidden: Boolean(base.planeHidden)
+    };
+  }
+  if (type === "agent") {
+    return {
+      ...base,
+      // Display label + model/provider override per agent (optional).
+      name: str(base.name, "Agent"),
+      providerId: str(base.providerId, ""),
+      model: str(base.model, ""),
+      systemPrompt: str(base.systemPrompt, ""),
+      // Working-field geometry is the element's own x/y/width/height; this flag
+      // toggles whether the translucent field outline is drawn around it.
+      fieldVisible: base.fieldVisible === false ? false : true,
+      // Last run status surfaced back to the UI.
+      status: str(base.status, "idle"),
+      lastRunAt: str(base.lastRunAt, ""),
+      lastError: str(base.lastError, ""),
       planeHidden: Boolean(base.planeHidden)
     };
   }
@@ -344,4 +368,81 @@ async function writeLlmContext(items) {
   await fs.writeFile(tmp, `${JSON.stringify(items, null, 2)}\n`, "utf8");
   await fs.rename(tmp, filePath);
   touchWorkspaceNotify();
+}
+
+// ---------- shared chat log (general + per-agent) ----------
+// One JSON file holds the whole conversation: each message tags which channel
+// it belongs to ("general" or an agent element id) so the UI can filter.
+function agentsDir() {
+  return path.join(getWorkspaceDir(), AGENTS_DIR);
+}
+function chatFilePath() {
+  return path.join(agentsDir(), AGENTS_CHAT_FILE);
+}
+
+export async function readChat() {
+  try {
+    const raw = await fs.readFile(chatFilePath(), "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.messages) ? parsed.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function appendChatMessage(message) {
+  const messages = await readChat();
+  const entry = {
+    id: `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    ts: Date.now(),
+    channel: String(message.channel || "general"),
+    role: String(message.role || "user"),
+    author: String(message.author || ""),
+    text: String(message.text || "")
+  };
+  messages.push(entry);
+  // keep the log bounded so it can't grow without limit
+  const trimmed = messages.slice(-1000);
+  await writeChat(trimmed);
+  return entry;
+}
+
+async function writeChat(messages) {
+  await fs.mkdir(agentsDir(), { recursive: true });
+  const filePath = chatFilePath();
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify({ messages }, null, 2), "utf8");
+  await fs.rename(tmp, filePath);
+  touchWorkspaceNotify();
+}
+
+// ---------- provider settings (persisted, secrets-at-rest) ----------
+// Stored in the workspace so server + MCP share configuration. NOTE: API keys
+// are written in plaintext to a local file — this is a local-first tool, the
+// file is meant to stay on the user's machine.
+function providersFilePath() {
+  return path.join(getWorkspaceDir(), PROVIDERS_FILE);
+}
+
+export async function readProviders() {
+  try {
+    const raw = await fs.readFile(providersFilePath(), "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : { providers: [], activeId: "" };
+  } catch {
+    return { providers: [], activeId: "" };
+  }
+}
+
+export async function writeProviders(payload) {
+  const data = {
+    providers: Array.isArray(payload?.providers) ? payload.providers : [],
+    activeId: String(payload?.activeId || "")
+  };
+  await fs.mkdir(getWorkspaceDir(), { recursive: true });
+  const filePath = providersFilePath();
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
+  await fs.rename(tmp, filePath);
+  return data;
 }

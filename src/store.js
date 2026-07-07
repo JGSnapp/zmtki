@@ -4,6 +4,8 @@ export {
   PLANE_FILE,
   NOTIFY_FILE,
   LLM_CONTEXT_FILE,
+  AGENTS_DIR,
+  PROVIDERS_FILE,
   newId,
   nowIso,
   ensureWorkspace as ensureDataFile,
@@ -21,5 +23,9 @@ export {
   consumeLlmContext,
   appendLlmContext,
   replaceLlmContext,
-  clearLlmContext
+  clearLlmContext,
+  readChat,
+  appendChatMessage,
+  readProviders,
+  writeProviders
 } from "./workspace.js";

@@ -1,15 +1,19 @@
 {
   "name": "zmtki",
-  "version": "0.2.0",
-  "description": "zmtki — a lightweight local whiteboard with REST and MCP access.",
+  "version": "0.3.0",
+  "description": "zmtki — a lightweight local whiteboard with built-in LangGraph agents, REST and MCP access.",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
     "mcp": "node src/mcp.js",
-    "check": "node --check src/server.js && node --check src/mcp.js && node --check public/app.js"
+    "check": "node --check src/server.js && node --check src/mcp.js && node --check src/providers.js && node --check src/agent.js && node --check src/workspace.js && node --check src/store.js && node --check public/app.js && node --check public/docs.js && node --check public/markdown.js && node --check public/stickers.js && node --check public/agents.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.1",
+    "@langchain/langgraph": "^1.4.7"
   }
 }

@@ -18,9 +18,15 @@ import {
   readLlmContext,
   consumeLlmContext,
   clearLlmContext,
+  readChat,
+  appendChatMessage,
+  readProviders,
+  writeProviders,
   PLANE_FILE,
   NOTIFY_FILE
 } from "./store.js";
+import { listProviders, testProvider } from "./providers.js";
+import { runAgent, regionSnapshot } from "./agent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "..", "public");
@@ -288,6 +294,87 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // ---------- providers (settings) ----------
+  if (req.method === "GET" && url.pathname === "/api/providers") {
+    sendJson(res, 200, await listProviders());
+    return;
+  }
+  if (req.method === "PUT" && url.pathname === "/api/providers") {
+    const body = await readBody(req);
+    // Body shape: { providers: [{...}], activeId } — keys come back masked from
+    // the UI; preserve real keys for entries that weren't edited.
+    const current = await readProviders();
+    const incoming = Array.isArray(body.providers) ? body.providers : [];
+    const byId = new Map(current.providers.map((p) => [p.id, p]));
+    const merged = incoming.map((p) => {
+      const prev = byId.get(p.id);
+      // Treat a masked key ("xxxx…xxxx") as "unchanged".
+      const keyChanged = typeof p.apiKey === "string" && !/^[•x]{2,}…[•x]{2,}$/.test(p.apiKey) && p.apiKey !== "";
+      return {
+        id: String(p.id || `prov_${Date.now().toString(36)}`),
+        kind: String(p.kind || "openai"),
+        name: String(p.name || "Provider"),
+        baseUrl: String(p.baseUrl || ""),
+        apiKey: keyChanged ? p.apiKey : (prev?.apiKey || ""),
+        model: String(p.model || ""),
+        extraHeaders: prev?.extraHeaders || {}
+      };
+    });
+    const saved = await writeProviders({ providers: merged, activeId: body.activeId || "" });
+    broadcast("providers:changed", { activeId: saved.activeId });
+    sendJson(res, 200, await listProviders());
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/providers/test") {
+    const body = await readBody(req);
+    // The UI sends a full record (possibly with a masked key); resolve the real key.
+    const current = await readProviders();
+    let provider = null;
+    if (body.id) provider = current.providers.find((p) => p.id === body.id);
+    if (!provider) provider = { ...body };
+    else Object.assign(provider, body);
+    const result = await testProvider(provider);
+    sendJson(res, 200, result);
+    return;
+  }
+
+  // ---------- chat (shared + per-agent) ----------
+  if (req.method === "GET" && url.pathname === "/api/chat") {
+    const channel = url.searchParams.get("channel") || "general";
+    const all = await readChat();
+    const filtered = all.filter((m) => channel === "*" || m.channel === channel);
+    sendJson(res, 200, { channel, count: filtered.length, messages: filtered });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/chat") {
+    const body = await readBody(req);
+    const channel = String(body.channel || "general");
+    const msg = await appendChatMessage({
+      channel,
+      role: String(body.role || "user"),
+      author: String(body.author || ""),
+      text: String(body.text || "")
+    });
+    broadcast("chat:message", msg);
+    sendJson(res, 201, msg);
+    return;
+  }
+
+  // ---------- agents ----------
+  if (req.method === "POST" && url.pathname === "/api/agents/run") {
+    const body = await readBody(req);
+    const agentId = String(body.agentId || "");
+    if (!agentId) { sendJson(res, 400, { error: "agentId is required" }); return; }
+    // Run asynchronously so the request returns immediately; results stream back
+    // through the board + chat (SSE broadcasts). This keeps long agent loops from
+    // blocking the HTTP response, and the UI shows live progress on the element.
+    res.writeHead(202, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, queued: true, agentId }));
+    runAgent(agentId, { input: String(body.input || ""), images: body.images || [], snapshotRenderer: regionSnapshotForRun })
+      .catch((error) => console.error("agent run failed:", error));
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/events") {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -484,6 +571,14 @@ async function readBody(req) {
 function sendJson(res, status, payload) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+// Render the agent's working field to an SVG data URL. A DOM-less server can't
+// produce a true raster screenshot, so we emit a compact SVG — vision-capable
+// models accept image/svg+xml. The client may also supply richer canvas snapshots
+// via the run request's `images` field.
+async function regionSnapshotForRun(field) {
+  return regionSnapshot(field);
 }
 
 // Compress a board element into a compact, LLM-friendly context item: keep the

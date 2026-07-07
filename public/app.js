@@ -16,6 +16,14 @@ const importInput = document.querySelector("#importInput");
 const imageFitBtn = document.querySelector("#imageFitBtn");
 const gradientPicker = document.querySelector("#gradientPicker");
 const planeViewSelect = document.querySelector("#planeViewSelect");
+const agentToolbar = document.querySelector("#agentToolbar");
+const agentNameInput = document.querySelector("#agentNameInput");
+const agentProviderSelect = document.querySelector("#agentProviderSelect");
+const agentModelInput = document.querySelector("#agentModelInput");
+const agentPromptInput = document.querySelector("#agentPromptInput");
+const agentFieldVisible = document.querySelector("#agentFieldVisible");
+const agentRunBtn = document.querySelector("#agentRunBtn");
+const agentOpenChatBtn = document.querySelector("#agentOpenChatBtn");
 const addToContextBtn = document.querySelector("#addToContextBtn");
 const styleControls = [fillInput, strokeInput, strokeWidthInput, fontSizeInput]
   .map((input) => input.closest(".field"))
@@ -26,7 +34,7 @@ const xlinkns = "http://www.w3.org/1999/xlink";
 const minSize = 24;
 const snapScreenRadius = 22;
 const anchorNames = ["nw", "n", "ne", "e", "se", "s", "sw", "w", "c"];
-const shapeTypes = new Set(["rect", "ellipse", "diamond", "sticky", "text", "frame", "image", "card", "file", "sticker"]);
+const shapeTypes = new Set(["rect", "ellipse", "diamond", "sticky", "text", "frame", "image", "card", "file", "sticker", "agent"]);
 const connectorTypes = new Set(["line", "arrow"]);
 // Plane file is named zmtki-plane.json; legacy codex-miro-plane*.json files are
 // still opened for back-compat when a zmtki file is not present.
@@ -78,6 +86,7 @@ const state = {
   activeTouches: new Map(),
   boardKind: "server",
   workspace: { dirHandle: null, boardFileHandle: null, assetUrls: new Map(), fileHandles: new Map() },
+  agentProviders: []
 };
 
 const defaults = {
@@ -92,7 +101,8 @@ const defaults = {
   image: { width: 240, height: 160, fill: "transparent", stroke: "transparent", strokeWidth: 0 },
   card: { width: 200, height: 300, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1, text: "# Карточка\n\nДважды кликните, чтобы открыть редактор." },
   file: { width: 150, height: 132, fill: "#ffffff", stroke: "#cbd5e1", strokeWidth: 1, text: "" },
-  sticker: { width: 120, height: 120, fill: "transparent", stroke: "transparent", strokeWidth: 0, text: "" }
+  sticker: { width: 120, height: 120, fill: "transparent", stroke: "transparent", strokeWidth: 0, text: "" },
+  agent: { width: 560, height: 420, fill: "#0f172a", stroke: "#22d3ee", strokeWidth: 1, text: "" }
 };
 
 init().catch((error) => {
@@ -568,6 +578,12 @@ function connectEvents() {
         updateContextButton(data.count ?? 0);
       } catch { /* ignore */ }
     });
+    es.addEventListener("chat:message", (event) => {
+      try {
+        const msg = JSON.parse(event.data || "{}");
+        window.Agents?.onChatMessage?.(msg);
+      } catch { /* ignore */ }
+    });
     es.onerror = () => {
       es.close();
       setTimeout(open, retryMs);
@@ -728,6 +744,8 @@ function publishApp() {
     getMode: () => state.mode,
     setMode,
     getCards: () => state.board.elements.filter((e) => e.type === "card"),
+    getAgents: () => state.board.elements.filter((e) => e.type === "agent"),
+    captureFieldSnapshot,
     createCard: () => createCardElement(),
     saveAssetFile,
     saveCard: async (card, options = {}) => {
@@ -1279,10 +1297,23 @@ function wireToolbar() {
     btn.addEventListener("click", () => applyGradientPreset(btn.dataset.grad));
   });
   planeViewSelect?.addEventListener("change", () => setCardPlaneView(planeViewSelect.value));
+  agentNameInput?.addEventListener("change", () => patchSelectedAgentMeta({ name: agentNameInput.value }));
+  agentNameInput?.addEventListener("input", () => patchSelectedAgentMeta({ name: agentNameInput.value }, { save: false }));
+  agentProviderSelect?.addEventListener("change", () => patchSelectedAgentMeta({ providerId: agentProviderSelect.value }));
+  agentModelInput?.addEventListener("change", () => patchSelectedAgentMeta({ model: agentModelInput.value }));
+  agentPromptInput?.addEventListener("change", () => patchSelectedAgentMeta({ systemPrompt: agentPromptInput.value }));
+  agentFieldVisible?.addEventListener("change", () => patchSelectedAgentMeta({ fieldVisible: agentFieldVisible.checked }));
+  agentRunBtn?.addEventListener("click", () => runSelectedAgent());
+  agentOpenChatBtn?.addEventListener("click", () => {
+    const agent = getSelectedAgent();
+    if (agent) window.Agents?.openChatFor?.(agent.id);
+  });
   addToContextBtn?.addEventListener("click", (event) => {
     if (event.shiftKey) clearLlmContextBuffer();
     else addSelectionToLlmContext();
   });
+  document.querySelector("#agentsChatBtn")?.addEventListener("click", () => window.Agents?.toggleChat?.());
+  document.querySelector("#settingsBtn")?.addEventListener("click", () => window.Agents?.openSettings?.());
 }
 
 async function clearLlmContextBuffer() {
@@ -1502,7 +1533,90 @@ function render() {
       planeViewSelect.value = selectedCards[0].meta?.planeView || "auto";
     }
   }
+  updateAgentToolbar();
   positionEditor();
+}
+
+function getSelectedAgent() {
+  const ids = selectedIds();
+  if (ids.length !== 1) return null;
+  const el = state.board.elements.find((e) => e.id === ids[0]);
+  return el?.type === "agent" ? el : null;
+}
+
+async function ensureAgentProviders() {
+  if (state.agentProviders.length) return state.agentProviders;
+  try {
+    const res = await fetch("/api/providers", { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    state.agentProviders = data.providers || [];
+    return state.agentProviders;
+  } catch {
+    return [];
+  }
+}
+
+function updateAgentToolbar() {
+  const agent = getSelectedAgent();
+  if (agentToolbar) agentToolbar.hidden = !agent;
+  if (!agent) return;
+  ensureAgentProviders().then((providers) => {
+    if (agentNameInput) agentNameInput.value = agent.meta?.name || "Agent";
+    if (agentModelInput) agentModelInput.value = agent.meta?.model || "";
+    if (agentPromptInput) agentPromptInput.value = agent.meta?.systemPrompt || "";
+    if (agentFieldVisible) agentFieldVisible.checked = agent.meta?.fieldVisible !== false;
+    if (agentProviderSelect) {
+      agentProviderSelect.innerHTML = "";
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = "Провайдер по умолчанию";
+      agentProviderSelect.append(def);
+      for (const p of providers) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = p.name || p.id;
+        agentProviderSelect.append(o);
+      }
+      agentProviderSelect.value = agent.meta?.providerId || "";
+    }
+  });
+}
+
+function patchSelectedAgentMeta(patch, { save = true } = {}) {
+  const agent = getSelectedAgent();
+  if (!agent) return;
+  agent.meta = { ...(agent.meta || {}), ...patch };
+  if (save) {
+    pushHistory();
+    saveBoard();
+  }
+  render();
+}
+
+async function runSelectedAgent() {
+  const agent = getSelectedAgent();
+  if (!agent) return;
+  window.Agents?.openChatFor?.(agent.id);
+  await window.Agents?.runAgent?.(agent.id, "Продолжи работу с текущим контекстом на доске.");
+}
+
+function captureFieldSnapshot(agent) {
+  if (!svg || !viewport || !agent) return [];
+  try {
+    const off = document.createElementNS(svgns, "svg");
+    off.setAttribute("xmlns", svgns);
+    off.setAttribute("width", String(Math.round(agent.width)));
+    off.setAttribute("height", String(Math.round(agent.height)));
+    off.setAttribute("viewBox", `${agent.x} ${agent.y} ${agent.width} ${agent.height}`);
+    const defs = svg.querySelector("defs");
+    if (defs) off.appendChild(defs.cloneNode(true));
+    off.appendChild(viewport.cloneNode(true));
+    const xml = new XMLSerializer().serializeToString(off);
+    return [`data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(xml)))}`];
+  } catch {
+    return [];
+  }
 }
 
 function renderElement(element, isSelected = element.id === state.selectedId) {
@@ -1559,6 +1673,18 @@ function renderElement(element, isSelected = element.id === state.selectedId) {
     image.setAttributeNS(xlinkns, "href", element.url || "");
     image.setAttribute("href", element.url || "");
     group.append(image);
+  } else if (element.type === "agent") {
+    group.append(renderAgentElement(element));
+    group.append(el("rect", {
+      class: "card-hit",
+      x: 0,
+      y: 0,
+      width: Math.max(1, element.width),
+      height: Math.max(1, element.height),
+      rx: 14,
+      ry: 14,
+      fill: "#ffffff"
+    }));
   } else if (element.type === "file") {
     group.append(fileForeignObject(element));
     group.append(el("rect", {
@@ -1969,6 +2095,50 @@ function textForeignObject(element, className) {
   return fo;
 }
 
+// Agent element: a translucent working field (its context window on the plane)
+// plus a small badge showing name + status. The field is drawn with a real fill
+// (CSS opacity keeps it hit-testable, matching the card-hit pattern).
+function renderAgentElement(element) {
+  const g = el("g", { class: "agent-field" });
+  const meta = element.meta || {};
+  const status = meta.status || "idle";
+  const w = Math.max(1, element.width);
+  const h = Math.max(1, element.height);
+  const visible = meta.fieldVisible !== false;
+  if (visible) {
+    g.append(el("rect", {
+      class: `agent-field-rect agent-status-${status}`,
+      x: 0, y: 0, width: w, height: h,
+      rx: 14, ry: 14,
+      fill: "rgba(34, 211, 238, 0.06)",
+      stroke: "#22d3ee",
+      "stroke-width": 2,
+      "stroke-dasharray": "10 8"
+    }));
+  }
+  // Badge in the top-left corner: 🤖 name · status.
+  const badge = el("foreignObject", { x: 0, y: 0, width: Math.min(360, w), height: 40 });
+  const div = document.createElement("div");
+  div.className = `agent-badge agent-status-${status}`;
+  const dot = document.createElement("span");
+  dot.className = "agent-dot";
+  div.append(dot);
+  const name = document.createElement("span");
+  name.className = "agent-name";
+  name.textContent = `🤖 ${meta.name || "Agent"}`;
+  div.append(name);
+  const st = document.createElement("span");
+  st.className = "agent-status-text";
+  st.textContent = status === "idle" ? "" : ` · ${status}`;
+  div.append(st);
+  if (meta.lastError) {
+    div.title = meta.lastError;
+  }
+  badge.append(div);
+  g.append(badge);
+  return g;
+}
+
 // Card renders either a portrait header (2:3) or the scaled-down markdown body,
 // depending on meta.planeView. "auto" = header when a header is configured, else
 // the markdown content; "header"/"content" force one or the other.
@@ -2243,7 +2413,7 @@ function beginMove(event, element) {
       return [id, { x: el?.x || 0, y: el?.y || 0 }];
     })),
     clearConnectorBindings: ids.some((id) => connectorTypes.has((state.board.elements.find((e) => e.id === id) || {}).type)),
-    openOnClick: effectiveTool(event) === "select" && (element.type === "file" || element.type === "card") && !event.shiftKey
+    openOnClick: effectiveTool(event) === "select" && (element.type === "file" || element.type === "card" || element.type === "agent") && !event.shiftKey
   };
   svg.setPointerCapture(event.pointerId);
 }
@@ -2307,6 +2477,13 @@ function onPointerDown(event) {
   setSelection([element.id]);
   if (state.tool === "card") {
     // cards drop at default size; drawing them by drag is awkward at small scale
+    state.action = null;
+    saveBoard();
+    render();
+    return;
+  }
+  if (state.tool === "agent") {
+    // agents use a fixed-size working field; just drop and select
     state.action = null;
     saveBoard();
     render();
@@ -2492,6 +2669,9 @@ function onPointerUp(event) {
         Docs.openEditor(target);
         applyMode("editor");
       }
+      else if (target?.type === "agent") {
+        window.Agents?.openChatFor?.(target.id);
+      }
     }
   }
   const current = state.action.id ? state.board.elements.find((item) => item.id === state.action.id) : null;
@@ -2584,6 +2764,11 @@ function onDoubleClick(event) {
   if (element.type === "file") {
     event.stopPropagation();
     openFileElement(element);
+    return;
+  }
+  if (element.type === "agent") {
+    event.stopPropagation();
+    window.Agents?.openChatFor?.(element.id);
     return;
   }
   if (!isTextEditable(element)) return;
@@ -2684,7 +2869,19 @@ function createElement(type, point) {
     element.strokeWidth = 0;
     element.meta = { packId: "", stickerId: "", sourceFile: "" };
   }
-  if (!["sticky", "frame", "text", "image", "card", "file"].includes(type)) element.fill = state.style.fill;
+  if (type === "agent") {
+    element.meta = {
+      name: "Agent",
+      providerId: "",
+      model: "",
+      systemPrompt: "",
+      fieldVisible: true,
+      status: "idle",
+      lastRunAt: "",
+      lastError: ""
+    };
+  }
+  if (!["sticky", "frame", "text", "image", "card", "file", "agent"].includes(type)) element.fill = state.style.fill;
   if (connectorTypes.has(type) || type === "pen") {
     element.fill = "transparent";
     element.stroke = state.style.stroke;
