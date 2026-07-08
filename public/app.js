@@ -25,6 +25,14 @@ const agentRegionTopicInput = document.querySelector("#agentRegionTopicInput");
 const agentFieldVisible = document.querySelector("#agentFieldVisible");
 const agentRunBtn = document.querySelector("#agentRunBtn");
 const agentOpenChatBtn = document.querySelector("#agentOpenChatBtn");
+const agentPanelName = document.querySelector("#agentPanelName");
+const agentPanelRole = document.querySelector("#agentPanelRole");
+const agentPanelDescription = document.querySelector("#agentPanelDescription");
+const agentPanelRegionTopic = document.querySelector("#agentPanelRegionTopic");
+const agentPanelProvider = document.querySelector("#agentPanelProvider");
+const agentPanelModel = document.querySelector("#agentPanelModel");
+const agentPanelPrompt = document.querySelector("#agentPanelPrompt");
+const agentPanelFieldVisible = document.querySelector("#agentPanelFieldVisible");
 const addToContextBtn = document.querySelector("#addToContextBtn");
 const styleControls = [fillInput, strokeInput, strokeWidthInput, fontSizeInput]
   .map((input) => input.closest(".field"))
@@ -772,7 +780,29 @@ function publishApp() {
     setMode,
     getCards: () => state.board.elements.filter((e) => e.type === "card"),
     getAgents: () => state.board.elements.filter((e) => e.type === "agent"),
+    getAgentById: (id) => state.board.elements.find((e) => e.type === "agent" && e.id === id) || null,
+    setAgentProviders: (providers) => {
+      state.agentProviders = Array.isArray(providers) ? providers.map((p) => ({ ...p })) : [];
+    },
     captureFieldSnapshot,
+    selectElement: (id) => {
+      if (!id) return;
+      const element = state.board.elements.find((e) => e.id === id);
+      if (!element) return;
+      setSelection([id]);
+      state.view.x = window.innerWidth / 2 - (element.x + (element.width || 0) / 2) * state.view.zoom;
+      state.view.y = window.innerHeight / 2 - (element.y + (element.height || 0) / 2) * state.view.zoom;
+      render();
+    },
+    updateAgentMeta: (id, patch) => {
+      const agent = state.board.elements.find((e) => e.type === "agent" && e.id === id);
+      if (!agent) return false;
+      pushHistory();
+      agent.meta = { ...(agent.meta || {}), ...patch };
+      saveBoard();
+      render();
+      return true;
+    },
     createCard: () => createCardElement(),
     saveAssetFile,
     saveCard: async (card, options = {}) => {
@@ -1598,13 +1628,29 @@ async function ensureAgentProviders() {
 function updateAgentToolbar() {
   const agent = getSelectedAgent();
   if (agentToolbar) agentToolbar.hidden = !agent;
-  if (!agent) return;
+  if (!agent) {
+    if (agentPanelName) agentPanelName.value = "";
+    if (agentPanelRole) agentPanelRole.value = "";
+    if (agentPanelDescription) agentPanelDescription.value = "";
+    if (agentPanelRegionTopic) agentPanelRegionTopic.value = "";
+    if (agentPanelModel) agentPanelModel.value = "";
+    if (agentPanelPrompt) agentPanelPrompt.value = "";
+    if (agentPanelFieldVisible) agentPanelFieldVisible.checked = true;
+    return;
+  }
   ensureAgentProviders().then((providers) => {
     if (agentNameInput) agentNameInput.value = agent.meta?.name || "Agent";
     if (agentModelInput) agentModelInput.value = agent.meta?.model || "";
     if (agentPromptInput) agentPromptInput.value = agent.meta?.systemPrompt || "";
     if (agentRegionTopicInput) agentRegionTopicInput.value = agent.meta?.regionTopic || "";
     if (agentFieldVisible) agentFieldVisible.checked = agent.meta?.fieldVisible !== false;
+    if (agentPanelName) agentPanelName.value = agent.meta?.name || "Agent";
+    if (agentPanelRole) agentPanelRole.value = agent.meta?.role || "";
+    if (agentPanelDescription) agentPanelDescription.value = agent.meta?.description || "";
+    if (agentPanelRegionTopic) agentPanelRegionTopic.value = agent.meta?.regionTopic || "";
+    if (agentPanelModel) agentPanelModel.value = agent.meta?.model || "";
+    if (agentPanelPrompt) agentPanelPrompt.value = agent.meta?.systemPrompt || "";
+    if (agentPanelFieldVisible) agentPanelFieldVisible.checked = agent.meta?.fieldVisible !== false;
     if (agentProviderSelect) {
       agentProviderSelect.innerHTML = "";
       const def = document.createElement("option");
@@ -1618,6 +1664,20 @@ function updateAgentToolbar() {
         agentProviderSelect.append(o);
       }
       agentProviderSelect.value = agent.meta?.providerId || "";
+    }
+    if (agentPanelProvider) {
+      agentPanelProvider.innerHTML = "";
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = "Провайдер по умолчанию";
+      agentPanelProvider.append(def);
+      for (const p of providers) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = p.name || p.id;
+        agentPanelProvider.append(o);
+      }
+      agentPanelProvider.value = agent.meta?.providerId || "";
     }
   });
 }
@@ -2931,6 +2991,8 @@ function createElement(type, point) {
   if (type === "agent") {
     element.meta = {
       name: "Agent",
+      description: "",
+      role: "",
       providerId: "",
       model: "",
       systemPrompt: "",

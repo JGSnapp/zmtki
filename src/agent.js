@@ -729,12 +729,16 @@ async function setAgentStatus(agentId, status, errorMessage = "") {
 
 function systemPrompt(agent) {
   const name = agent.meta?.name || "Agent";
+  const role = agent.meta?.role?.trim();
+  const description = agent.meta?.description?.trim();
   const custom = agent.meta?.systemPrompt?.trim();
   const topic = agent.meta?.regionTopic?.trim();
   const topicLine = topic ? `\nYour assigned section topic: ${topic}. Focus on this area of the board.` : "";
   if (custom) return custom + topicLine;
   return [
     `You are ${name}, an autonomous agent living on the zmtki whiteboard.`,
+    role ? `Your role: ${role}.` : "",
+    description ? `About you: ${description}.` : "",
     "Your working field is a rectangle on the plane; you can only directly see objects inside it.",
     "You can move and resize your field, snapshot it as an image, read/write files in the workspace, read and create cards, post to chat, search the web, run research_topic, generate images, and organize sections with create_region_frame.",
     "Your edits to existing cards are limited to cards inside your working field. Use board_overview and fit_agent_to_region to navigate between sections.",

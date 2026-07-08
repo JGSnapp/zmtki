@@ -257,6 +257,8 @@ function normalizeMeta(meta, type) {
       ...base,
       // Display label + model/provider override per agent (optional).
       name: str(base.name, "Agent"),
+      description: str(base.description, ""),
+      role: str(base.role, ""),
       providerId: str(base.providerId, ""),
       model: str(base.model, ""),
       systemPrompt: str(base.systemPrompt, ""),

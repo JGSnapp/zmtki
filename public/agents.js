@@ -13,6 +13,7 @@
 
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const App = () => window.App;
 
   const panel = () => $("#agentPanel");
@@ -21,54 +22,106 @@
   const pickRow = () => $("#agentPickRow");
   const targetSelect = () => $("#agentTargetSelect");
   const composeInput = () => $("#agentComposeInput");
-  const settingsModal = () => $("#settingsModal");
+  const composeSnapshot = () => $("#agentComposeSnapshot");
+  const managerList = () => $("#agentManagerList");
+  const editorEmpty = () => $("#agentEditorEmpty");
+  const editorForm = () => $("#agentEditorForm");
 
-  // Active channel: "general", "*", or an agent element id.
   let activeChannel = "general";
-  // Agent ids selected for multi-run from the pick row.
+  let activeTab = "chat";
+  let editingAgentId = "";
   let pickedAgentIds = new Set();
-  // Cache of provider settings being edited in the modal.
   let editProviders = [];
   let editActiveId = "";
 
   function init() {
-    $("#agentsChatBtn")?.addEventListener("click", () => toggleChat());
-    $("#agentCloseBtn")?.addEventListener("click", () => closeChat());
-    $("#agentRefreshBtn")?.addEventListener("click", () => refresh());
+    $("#agentsChatBtn")?.addEventListener("click", () => openPanel("chat"));
+    $("#agentCloseBtn")?.addEventListener("click", closePanel);
+    $("#agentRefreshBtn")?.addEventListener("click", refresh);
     $("#agentCompose")?.addEventListener("submit", (e) => { e.preventDefault(); send(); });
-
     $("#settingsBtn")?.addEventListener("click", () => openSettings());
-    $("#settingsModalClose")?.addEventListener("click", () => closeSettings());
-    settingsModal()?.addEventListener("mousedown", (e) => { if (e.target === settingsModal()) closeSettings(); });
-    $("#settingsAddProviderBtn")?.addEventListener("click", () => addProviderRow());
-    $("#settingsApply")?.addEventListener("click", () => saveSettings());
+    $("#settingsAddProviderBtn")?.addEventListener("click", addProviderRow);
+    $("#settingsApply")?.addEventListener("click", saveSettings);
+    $$("[data-agent-panel-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.agentPanelTab));
+    });
 
-    // Poll chat periodically as a fallback when SSE isn't connected.
+    bindAgentEditor();
     setInterval(() => { if (!panel()?.hidden) refresh(); }, 4000);
   }
 
-  // ---------- chat panel ----------
-  function toggleChat() {
-    const p = panel();
-    if (!p) return;
-    p.hidden = !p.hidden;
-    if (!p.hidden) { renderChannels(); refresh(); composeInput()?.focus(); }
+  function bindAgentEditor() {
+    const patch = (field, value) => {
+      if (!editingAgentId) return;
+      App()?.updateAgentMeta?.(editingAgentId, { [field]: value });
+      renderAgentManager();
+    };
+    $("#agentPanelName")?.addEventListener("change", (e) => patch("name", e.target.value));
+    $("#agentPanelRole")?.addEventListener("change", (e) => patch("role", e.target.value));
+    $("#agentPanelDescription")?.addEventListener("change", (e) => patch("description", e.target.value));
+    $("#agentPanelRegionTopic")?.addEventListener("change", (e) => patch("regionTopic", e.target.value));
+    $("#agentPanelProvider")?.addEventListener("change", (e) => patch("providerId", e.target.value));
+    $("#agentPanelModel")?.addEventListener("change", (e) => patch("model", e.target.value));
+    $("#agentPanelPrompt")?.addEventListener("change", (e) => patch("systemPrompt", e.target.value));
+    $("#agentPanelFieldVisible")?.addEventListener("change", (e) => patch("fieldVisible", e.target.checked));
+    $("#agentPanelFocus")?.addEventListener("click", () => {
+      if (!editingAgentId) return;
+      App()?.selectElement?.(editingAgentId);
+    });
+    $("#agentPanelOpenChat")?.addEventListener("click", () => {
+      if (!editingAgentId) return;
+      openChatFor(editingAgentId);
+    });
   }
 
-  function closeChat() {
-    const p = panel();
-    if (p) p.hidden = true;
-  }
-
-  // Clicking an agent element on the canvas opens the panel on that agent's channel.
-  function openChatFor(agentId) {
+  function openPanel(tab = "chat") {
     const p = panel();
     if (!p) return;
     p.hidden = false;
-    activeChannel = agentId || "general";
+    switchTab(tab);
     renderChannels();
+    renderAgentManager();
     refresh();
     composeInput()?.focus();
+  }
+
+  function closePanel() {
+    if (panel()) panel().hidden = true;
+  }
+
+  function switchTab(tab) {
+    activeTab = tab || "chat";
+    $$("[data-agent-panel-tab]").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.agentPanelTab === activeTab);
+    });
+    $$("[data-agent-panel-section]").forEach((section) => {
+      section.classList.toggle("active", section.dataset.agentPanelSection === activeTab);
+    });
+    if (activeTab === "providers") {
+      loadProviders().then(renderProviderRows);
+    }
+    if (activeTab === "agents") {
+      renderAgentManager();
+    }
+  }
+
+  function toggleChat() {
+    if (panel()?.hidden) openPanel("chat");
+    else closePanel();
+  }
+
+  function openChatFor(agentId) {
+    activeChannel = agentId || "general";
+    if (agentId) editingAgentId = agentId;
+    openPanel("chat");
+  }
+
+  function openSettings() {
+    openPanel("providers");
+  }
+
+  function getAgents() {
+    return App()?.getAgents?.() || [];
   }
 
   function renderChannels() {
@@ -81,7 +134,11 @@
       btn.type = "button";
       btn.className = "agent-channel" + (channel === activeChannel ? " active" : "");
       btn.textContent = label;
-      btn.addEventListener("click", () => { activeChannel = channel; renderChannels(); refresh(); });
+      btn.addEventListener("click", () => {
+        activeChannel = channel;
+        renderChannels();
+        refresh();
+      });
       return btn;
     };
     host.append(make("general", "Общий"));
@@ -91,25 +148,25 @@
     renderAgentPick(agents);
 
     const sel = targetSelect();
-    if (sel) {
-      sel.innerHTML = "";
-      const optAll = document.createElement("option");
-      optAll.value = "all"; optAll.textContent = "▶ Запустить всех";
-      sel.append(optAll);
-      const optSel = document.createElement("option");
-      optSel.value = "selected"; optSel.textContent = "▶ Запустить выбранных";
-      sel.append(optSel);
-      const optGen = document.createElement("option");
-      optGen.value = "general"; optGen.textContent = "Общий чат";
-      sel.append(optGen);
-      for (const a of agents) {
-        const o = document.createElement("option");
-        o.value = a.id; o.textContent = a.meta?.name || "Agent";
-        sel.append(o);
-      }
-      if (activeChannel !== "general" && activeChannel !== "*") sel.value = activeChannel;
-      else sel.value = "general";
+    if (!sel) return;
+    sel.innerHTML = "";
+    [
+      ["all", "▶ Запустить всех"],
+      ["selected", "▶ Запустить выбранных"],
+      ["general", "Общий чат"]
+    ].forEach(([value, label]) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      sel.append(o);
+    });
+    for (const a of agents) {
+      const o = document.createElement("option");
+      o.value = a.id;
+      o.textContent = a.meta?.name || "Agent";
+      sel.append(o);
     }
+    sel.value = activeChannel !== "general" && activeChannel !== "*" ? activeChannel : "general";
   }
 
   function renderAgentPick(agents) {
@@ -124,14 +181,13 @@
     row.innerHTML = "";
     const label = document.createElement("span");
     label.className = "agent-pick-label";
-    label.textContent = "Агенты:";
+    label.textContent = "Выбранные агенты:";
     row.append(label);
     for (const a of agents) {
       const wrap = document.createElement("label");
       wrap.className = "agent-pick-item";
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.value = a.id;
       cb.checked = pickedAgentIds.has(a.id);
       cb.addEventListener("change", () => {
         if (cb.checked) pickedAgentIds.add(a.id);
@@ -145,24 +201,88 @@
     allBtn.className = "agent-pick-all";
     allBtn.textContent = "Все";
     allBtn.addEventListener("click", () => {
-      for (const a of agents) pickedAgentIds.add(a.id);
+      pickedAgentIds = new Set(agents.map((a) => a.id));
       renderAgentPick(agents);
     });
     row.append(allBtn);
   }
 
-  function getAgents() {
-    return App()?.getAgents?.() || [];
+  function renderAgentManager() {
+    const host = managerList();
+    if (!host) return;
+    const agents = getAgents();
+    if (!editingAgentId && agents.length) {
+      editingAgentId = agents[0].id;
+    }
+    if (editingAgentId && !agents.some((a) => a.id === editingAgentId)) {
+      editingAgentId = agents[0]?.id || "";
+    }
+    host.innerHTML = "";
+    for (const agent of agents) {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "agent-manager-card" + (agent.id === editingAgentId ? " active" : "");
+      card.addEventListener("click", () => {
+        editingAgentId = agent.id;
+        App()?.selectElement?.(agent.id);
+        renderAgentManager();
+      });
+      const title = document.createElement("div");
+      title.className = "agent-manager-title";
+      title.textContent = agent.meta?.name || "Agent";
+      const meta = document.createElement("div");
+      meta.className = "agent-manager-meta";
+      meta.textContent = [agent.meta?.role, agent.meta?.regionTopic, agent.meta?.status].filter(Boolean).join(" · ");
+      card.append(title, meta);
+      host.append(card);
+    }
+    syncAgentEditor();
+  }
+
+  function syncAgentEditor() {
+    const agent = editingAgentId ? App()?.getAgentById?.(editingAgentId) : null;
+    editorEmpty().hidden = !!agent;
+    editorForm().hidden = !agent;
+    if (!agent) return;
+
+    $("#agentPanelName").value = agent.meta?.name || "";
+    $("#agentPanelRole").value = agent.meta?.role || "";
+    $("#agentPanelDescription").value = agent.meta?.description || "";
+    $("#agentPanelRegionTopic").value = agent.meta?.regionTopic || "";
+    $("#agentPanelModel").value = agent.meta?.model || "";
+    $("#agentPanelPrompt").value = agent.meta?.systemPrompt || "";
+    $("#agentPanelFieldVisible").checked = agent.meta?.fieldVisible !== false;
+
+    ensureProvidersForAgentEditor(agent.meta?.providerId || "");
+  }
+
+  async function ensureProvidersForAgentEditor(selectedId = "") {
+    await loadProviders();
+    const sel = $("#agentPanelProvider");
+    if (!sel) return;
+    sel.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "Провайдер по умолчанию";
+    sel.append(def);
+    for (const p of editProviders) {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.name || p.id;
+      sel.append(o);
+    }
+    sel.value = selectedId;
   }
 
   async function refresh() {
     renderChannels();
+    renderAgentManager();
     try {
       const res = await fetch(`/api/chat?channel=${encodeURIComponent(activeChannel)}`, { cache: "no-store" });
       if (!res.ok) return;
       const payload = await res.json();
       renderLog(payload.messages || []);
-    } catch { /* server offline */ }
+    } catch {}
   }
 
   function renderLog(messages) {
@@ -190,11 +310,8 @@
     const meta = document.createElement("div");
     meta.className = "cm-meta";
     const channelLabel = m.channel && m.channel !== "general" ? ` · #${agentName(m.channel) || m.channel}` : "";
-    const who = m.role === "agent"
-      ? (agentName(m.author) || "Agent")
-      : (m.author || "вы");
-    const time = new Date(m.ts || Date.now()).toLocaleTimeString();
-    meta.textContent = `${who}${channelLabel} · ${time}`;
+    const who = m.role === "agent" ? (agentName(m.author) || "Agent") : (m.author || "вы");
+    meta.textContent = `${who}${channelLabel} · ${new Date(m.ts || Date.now()).toLocaleTimeString()}`;
     const text = document.createElement("div");
     text.className = "cm-text";
     text.textContent = m.text || "";
@@ -203,11 +320,9 @@
   }
 
   function agentName(id) {
-    const a = getAgents().find((x) => x.id === id);
-    return a?.meta?.name || id || "";
+    return getAgents().find((x) => x.id === id)?.meta?.name || id || "";
   }
 
-  // New message arrived via SSE — refresh if it belongs to the active channel.
   function onChatMessage(msg) {
     if (!panel()?.hidden && msg && (msg.channel === activeChannel || activeChannel === "*")) refresh();
   }
@@ -217,37 +332,31 @@
     const text = (input?.value || "").trim();
     if (!text) return;
     const target = targetSelect()?.value || "general";
+    const withSnapshot = !!composeSnapshot()?.checked;
     input.value = "";
 
     if (target === "all") {
       await postMessage("general", "user", "me", text);
-      const agents = getAgents();
-      for (const a of agents) await runAgent(a.id, text);
+      for (const a of getAgents()) await runAgent(a.id, text, { withSnapshot });
       activeChannel = "general";
-      renderChannels();
-      refresh();
-      return;
+      return refresh();
     }
     if (target === "selected") {
       await postMessage("general", "user", "me", text);
       const ids = pickedAgentIds.size ? [...pickedAgentIds] : getAgents().map((a) => a.id);
-      for (const id of ids) await runAgent(id, text);
+      for (const id of ids) await runAgent(id, text, { withSnapshot });
       activeChannel = "general";
-      renderChannels();
-      refresh();
-      return;
+      return refresh();
     }
     if (target === "general") {
       await postMessage("general", "user", "me", text);
       activeChannel = "general";
-      refresh();
-      return;
+      return refresh();
     }
     await postMessage(target, "user", "me", text);
     activeChannel = target;
-    renderChannels();
-    refresh();
-    await runAgent(target, text);
+    await refresh();
+    await runAgent(target, text, { withSnapshot });
   }
 
   async function postMessage(channel, role, author, text) {
@@ -257,7 +366,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channel, role, author, text })
       });
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   async function runAgent(agentId, input, { withSnapshot = false } = {}) {
@@ -273,20 +382,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
-    } catch { /* ignore */ }
-  }
-
-  // ---------- provider settings modal ----------
-  async function openSettings() {
-    const m = settingsModal();
-    if (!m) return;
-    await loadProviders();
-    renderProviderRows();
-    m.hidden = false;
-  }
-
-  function closeSettings() {
-    settingsModal()?.setAttribute("hidden", "");
+    } catch {}
   }
 
   async function loadProviders() {
@@ -303,51 +399,60 @@
 
   function renderProviderRows() {
     const host = $("#settingsProviders");
+    if (!host) return;
     host.innerHTML = "";
     if (!editProviders.length) {
       const empty = document.createElement("p");
       empty.className = "modal-hint";
-      empty.textContent = "Провайдеров пока нет. Нажмите «+ Добавить провайдер».";
+      empty.textContent = "Провайдеров пока нет. Добавьте первый провайдер ниже.";
       host.append(empty);
     }
     for (const p of editProviders) host.append(providerRow(p));
     const sel = $("#settingsActiveSelect");
-    sel.innerHTML = "";
-    for (const p of editProviders) {
-      const o = document.createElement("option");
-      o.value = p.id; o.textContent = p.name || p.id;
-      sel.append(o);
+    if (sel) {
+      sel.innerHTML = "";
+      for (const p of editProviders) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = p.name || p.id;
+        sel.append(o);
+      }
+      sel.value = editActiveId;
     }
-    sel.value = editActiveId;
   }
 
   function providerRow(p) {
     const row = document.createElement("div");
     row.className = "provider-row";
-    row.dataset.id = p.id;
 
     const kind = document.createElement("select");
     for (const k of ["openai", "anthropic", "codex"]) {
       const o = document.createElement("option");
-      o.value = k; o.textContent = k; if (p.kind === k) o.selected = true;
+      o.value = k;
+      o.textContent = k;
+      if (p.kind === k) o.selected = true;
       kind.append(o);
     }
     kind.addEventListener("change", () => { p.kind = kind.value; });
     row.append(kind);
 
     const name = document.createElement("input");
-    name.type = "text"; name.placeholder = "Название"; name.value = p.name || "";
+    name.type = "text";
+    name.placeholder = "Название";
+    name.value = p.name || "";
     name.addEventListener("input", () => { p.name = name.value; });
     row.append(name);
 
     const baseUrl = document.createElement("input");
-    baseUrl.type = "text"; baseUrl.placeholder = "Base URL (оставьте пустым для дефолта)";
+    baseUrl.type = "text";
+    baseUrl.placeholder = "Base URL";
     baseUrl.value = p.baseUrl || "";
     baseUrl.addEventListener("input", () => { p.baseUrl = baseUrl.value; });
     row.append(baseUrl);
 
     const apiKey = document.createElement("input");
-    apiKey.type = "password"; apiKey.placeholder = "API key / OAuth token";
+    apiKey.type = "password";
+    apiKey.placeholder = "API key / OAuth token";
     apiKey.value = p.apiKey && !isMasked(p.apiKey) ? p.apiKey : "";
     apiKey.dataset.masked = isMasked(p.apiKey) ? "1" : "0";
     if (isMasked(p.apiKey)) apiKey.placeholder = `${p.apiKey} (не изменён)`;
@@ -355,16 +460,20 @@
     row.append(apiKey);
 
     const model = document.createElement("input");
-    model.type = "text"; model.placeholder = "Модель (например gpt-4o-mini)";
+    model.type = "text";
+    model.placeholder = "Модель (например gpt-4o-mini)";
     model.style.gridColumn = "1 / 3";
     model.value = p.model || "";
     model.addEventListener("input", () => { p.model = model.value; });
     row.append(model);
 
     const testBtn = document.createElement("button");
-    testBtn.type = "button"; testBtn.textContent = "Тест"; testBtn.style.gridColumn = "3 / 4";
+    testBtn.type = "button";
+    testBtn.textContent = "Тест";
+    testBtn.style.gridColumn = "3 / 4";
     testBtn.addEventListener("click", async () => {
-      testBtn.disabled = true; testBtn.textContent = "…";
+      testBtn.disabled = true;
+      testBtn.textContent = "…";
       try {
         const res = await fetch("/api/providers/test", {
           method: "POST",
@@ -373,13 +482,19 @@
         });
         const r = await res.json();
         alert(r.ok ? `OK: ${r.content || "(пустой ответ)"}` : `Ошибка: ${r.error}`);
-      } catch (e) { alert(`Ошибка: ${e.message}`); }
-      finally { testBtn.disabled = false; testBtn.textContent = "Тест"; }
+      } catch (e) {
+        alert(`Ошибка: ${e.message}`);
+      } finally {
+        testBtn.disabled = false;
+        testBtn.textContent = "Тест";
+      }
     });
     row.append(testBtn);
 
     const del = document.createElement("button");
-    del.type = "button"; del.className = "prov-del"; del.textContent = "Удалить провайдер";
+    del.type = "button";
+    del.className = "prov-del";
+    del.textContent = "Удалить провайдер";
     del.addEventListener("click", () => {
       editProviders = editProviders.filter((x) => x.id !== p.id);
       if (editActiveId === p.id) editActiveId = editProviders[0]?.id || "";
@@ -405,13 +520,18 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ providers: editProviders, activeId: editActiveId })
       });
-      if (res.ok) {
-        closeSettings();
-      } else {
+      if (!res.ok) {
         const e = await res.json().catch(() => ({}));
         alert(`Не удалось сохранить: ${e.error || res.status}`);
+        return;
       }
-    } catch (e) { alert(`Ошибка сохранения: ${e.message}`); }
+      await loadProviders();
+      App()?.setAgentProviders?.(editProviders);
+      renderProviderRows();
+      renderAgentManager();
+    } catch (e) {
+      alert(`Ошибка сохранения: ${e.message}`);
+    }
   }
 
   function isMasked(key) {
@@ -421,12 +541,13 @@
   window.Agents = Object.assign(window.Agents || {}, {
     init,
     toggleChat,
-    closeChat,
+    closeChat: closePanel,
     openChatFor,
     onChatMessage,
     openSettings,
     refresh,
     runAgent
   });
+
   document.addEventListener("DOMContentLoaded", init);
 })();

@@ -226,45 +226,108 @@
     <!-- ===== AGENT CHAT PANEL ===== -->
     <aside class="agent-panel" id="agentPanel" hidden>
       <header class="agent-head">
-        <span>Чат с агентами</span>
+        <div class="agent-head-main">
+          <span>AI Workspace</span>
+          <div class="agent-head-sub">Чат, агенты и провайдеры</div>
+        </div>
         <div class="agent-head-actions">
           <button type="button" id="agentRefreshBtn" title="Обновить">↻</button>
           <button type="button" id="agentCloseBtn" title="Закрыть">✕</button>
         </div>
       </header>
-      <div class="agent-channels" id="agentChannels">
-        <!-- channel buttons injected at runtime -->
-      </div>
-      <div class="agent-pick" id="agentPickRow" hidden></div>
-      <div class="agent-log" id="agentLog"></div>
-      <form class="agent-compose" id="agentCompose">
-        <select id="agentTargetSelect" title="Кому адресовать сообщение / кого запустить"></select>
-        <input id="agentComposeInput" type="text" placeholder="Сообщение или инструкция агенту…" autocomplete="off">
-        <button type="submit" id="agentSendBtn">▶</button>
-      </form>
-    </aside>
 
-    <!-- ===== PROVIDER SETTINGS MODAL ===== -->
-    <div class="modal-backdrop" id="settingsModal" hidden>
-      <div class="modal settings-modal" role="dialog" aria-modal="true" aria-label="Провайдеры LLM">
-        <header class="modal-head">
-          <span>Провайдеры LLM</span>
-          <button id="settingsModalClose" title="Закрыть">✕</button>
-        </header>
-        <div class="modal-body" id="settingsBody">
-          <div class="settings-providers" id="settingsProviders"></div>
-          <button type="button" id="settingsAddProviderBtn" class="link-btn">+ Добавить провайдер</button>
-          <p class="modal-hint">Ключи хранятся локально в <code>.zmtki-providers.json</code> рабочей папки сервера. Для OAuth Codex используйте тип <code>codex</code> и совместимый OpenAI-эндпоинт с bearer-токеном.</p>
-        </div>
-        <footer class="modal-foot">
-          <span class="settings-active-row">
-            Активный:
-            <select id="settingsActiveSelect"></select>
-          </span>
-          <button id="settingsApply" class="primary">Сохранить</button>
-        </footer>
+      <div class="agent-panel-tabs">
+        <button type="button" class="agent-panel-tab active" data-agent-panel-tab="chat">Чат</button>
+        <button type="button" class="agent-panel-tab" data-agent-panel-tab="agents">Агенты</button>
+        <button type="button" class="agent-panel-tab" data-agent-panel-tab="providers">AI</button>
       </div>
-    </div>
+
+      <section class="agent-panel-section active" data-agent-panel-section="chat">
+        <div class="agent-channels" id="agentChannels">
+          <!-- channel buttons injected at runtime -->
+        </div>
+        <div class="agent-pick" id="agentPickRow" hidden></div>
+        <div class="agent-log" id="agentLog"></div>
+        <form class="agent-compose" id="agentCompose">
+          <select id="agentTargetSelect" title="Кому адресовать сообщение / кого запустить"></select>
+          <textarea id="agentComposeInput" placeholder="Сообщение или инструкция агенту…" autocomplete="off"></textarea>
+          <div class="agent-compose-actions">
+            <label class="agent-compose-check">
+              <input id="agentComposeSnapshot" type="checkbox">
+              Снимок поля
+            </label>
+            <button type="submit" id="agentSendBtn">Отправить</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="agent-panel-section" data-agent-panel-section="agents">
+        <div class="agent-manager">
+          <div class="agent-manager-list" id="agentManagerList"></div>
+          <div class="agent-manager-editor">
+            <div class="agent-editor-empty" id="agentEditorEmpty">Выберите агента на доске или в списке.</div>
+            <div class="agent-editor-form" id="agentEditorForm" hidden>
+              <label class="head-field">
+                <span>Имя</span>
+                <input id="agentPanelName" type="text" placeholder="Имя агента">
+              </label>
+              <label class="head-field">
+                <span>Роль</span>
+                <input id="agentPanelRole" type="text" placeholder="Например: Research lead">
+              </label>
+              <label class="head-field">
+                <span>Описание</span>
+                <textarea id="agentPanelDescription" placeholder="Что делает агент, за что отвечает"></textarea>
+              </label>
+              <label class="head-field">
+                <span>Тема / зона</span>
+                <input id="agentPanelRegionTopic" type="text" placeholder="Например: конкуренты, UX, backend">
+              </label>
+              <label class="head-field">
+                <span>Провайдер</span>
+                <select id="agentPanelProvider"></select>
+              </label>
+              <label class="head-field">
+                <span>Модель</span>
+                <input id="agentPanelModel" type="text" placeholder="Модель (override)">
+              </label>
+              <label class="head-field">
+                <span>System prompt</span>
+                <textarea id="agentPanelPrompt" placeholder="Системный промпт агента"></textarea>
+              </label>
+              <label class="agent-compose-check">
+                <input id="agentPanelFieldVisible" type="checkbox">
+                Показывать рабочее поле
+              </label>
+              <div class="agent-editor-actions">
+                <button type="button" id="agentPanelFocus">Найти на доске</button>
+                <button type="button" id="agentPanelOpenChat">Открыть чат</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="agent-panel-section" data-agent-panel-section="providers">
+        <div class="providers-block">
+          <div class="providers-block-head">
+            <div>
+              <div class="providers-block-title">Настройки AI</div>
+              <div class="providers-block-sub">Провайдеры и активная конфигурация</div>
+            </div>
+            <button type="button" id="settingsAddProviderBtn" class="link-btn">+ Добавить</button>
+          </div>
+          <div class="providers-active-row">
+            <span>Активный провайдер</span>
+            <select id="settingsActiveSelect"></select>
+          </div>
+          <div class="settings-providers" id="settingsProviders"></div>
+          <div class="providers-block-actions">
+            <button id="settingsApply" class="primary">Сохранить настройки AI</button>
+          </div>
+        </div>
+      </section>
+    </aside>
 
     <input id="headerFileInput" type="file" accept="image/*" hidden>
     <input id="imageInput" type="file" accept="image/*" hidden>
