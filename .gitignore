@@ -1,0 +1,16 @@
+node_modules/
+dist/
+out/
+release/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+.env
+.env.local
+*.log
+.vite/
+coverage/
+
+# Throwaway board from scripts/seed-demo.mjs and window captures from shot.ps1
+demo-board/
+shot.png

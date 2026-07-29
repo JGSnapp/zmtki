@@ -1,0 +1,38 @@
+{
+  "name": "zmtki",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Artifact Board - мультиагентная доска для разработки",
+  "packageManager": "pnpm@10.30.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:packages": "pnpm --filter @zmtki/board-schema build && pnpm --filter @zmtki/protocol build && pnpm --filter @zmtki/core build",
+    "dev": "pnpm build:packages && pnpm --filter @zmtki/desktop dev",
+    "build": "pnpm build:packages && pnpm --filter @zmtki/desktop build",
+    "dist": "pnpm build && pnpm --filter @zmtki/desktop dist",
+    "typecheck": "pnpm build:packages && pnpm -r typecheck",
+    "smoke": "pnpm build:packages && node scripts/smoke.mjs && node scripts/agent-smoke.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm smoke",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,css}\"",
+    "clean": "pnpm -r exec node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.19.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty"
+    ]
+  }
+}

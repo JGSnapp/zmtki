@@ -1,0 +1,39 @@
+{
+  "name": "@zmtki/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@zmtki/board-schema": "workspace:*",
+    "@zmtki/protocol": "workspace:*",
+    "diff": "^7.0.0",
+    "node-html-parser": "^7.0.1",
+    "sql.js": "^1.12.0",
+    "ulid": "^2.3.0",
+    "yjs": "^13.6.21",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/diff": "^6.0.0",
+    "@types/node": "^22.10.5",
+    "@types/sql.js": "^1.4.9",
+    "typescript": "^5.7.2"
+  }
+}
