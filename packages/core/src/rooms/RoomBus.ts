@@ -78,7 +78,11 @@ export class RoomBus {
     private readonly directory: AgentDirectory,
     private readonly inbox: AgentInbox,
     private readonly settings: () => AppSettings
-  ) {}
+  ) {
+    // Token/cost room pauses were removed as a product guard; clear leftovers
+    // from older sessions so existing chats are not stuck behind the banner.
+    this.liftSpendBudgets();
+  }
 
   list(): Room[] {
     return this.db
@@ -180,6 +184,19 @@ export class RoomBus {
     this.db.run('DELETE FROM messages WHERE room_id = ?', [roomId]);
     this.db.run('DELETE FROM message_search WHERE room_id = ?', [roomId]);
     this.db.run('DELETE FROM rooms WHERE id = ?', [roomId]);
+  }
+
+  /** Wipe message history; keep the room and its members. */
+  clear(roomId: string): Room | undefined {
+    const room = this.get(roomId);
+    if (!room) return undefined;
+    this.db.run('DELETE FROM messages WHERE room_id = ?', [roomId]);
+    this.db.run('DELETE FROM message_search WHERE room_id = ?', [roomId]);
+    return this.update(roomId, {
+      paused: false,
+      pausedReason: '',
+      budget: { ...room.budget, spentTokens: 0, spentCostUsd: 0 }
+    });
   }
 
   history(roomId: string, limit = 50): RoomMessage[] {
@@ -302,11 +319,6 @@ export class RoomBus {
       });
     }
 
-    if (this.detectStall(room)) {
-      this.pause(room, 'обсуждение идёт по кругу без изменений на доске');
-      return { ok: true, message, wake: [] };
-    }
-
     return { ok: true, message, wake };
   }
 
@@ -361,16 +373,35 @@ export class RoomBus {
   addSpend(roomId: string, tokens: number, costUsd: number): void {
     const room = this.get(roomId);
     if (!room) return;
-    const budget = {
-      ...room.budget,
-      spentTokens: room.budget.spentTokens + tokens,
-      spentCostUsd: room.budget.spentCostUsd + costUsd
-    };
-    const overTokens = budget.maxTokens !== null && budget.spentTokens > budget.maxTokens;
-    const overCost = budget.maxCostUsd !== null && budget.spentCostUsd > budget.maxCostUsd;
-    this.update(roomId, { budget });
-    if (overTokens || overCost) {
-      this.pause({ ...room, budget }, overTokens ? 'исчерпан бюджет токенов' : 'исчерпан денежный бюджет');
+    // Spend is tracked for stats only — rooms are not paused on token/cost caps.
+    this.update(roomId, {
+      budget: {
+        ...room.budget,
+        maxTokens: null,
+        maxCostUsd: null,
+        spentTokens: room.budget.spentTokens + tokens,
+        spentCostUsd: room.budget.spentCostUsd + costUsd
+      }
+    });
+  }
+
+  /** Drop token/cost caps and resume rooms paused only for those reasons. */
+  private liftSpendBudgets(): void {
+    for (const room of this.list()) {
+      const spendPaused =
+        room.paused &&
+        (room.pausedReason.includes('бюджет токенов') || room.pausedReason.includes('денежный бюджет'));
+      const hadCap = room.budget.maxTokens !== null || room.budget.maxCostUsd !== null;
+      if (!spendPaused && !hadCap) continue;
+      this.update(room.id, {
+        paused: spendPaused ? false : room.paused,
+        pausedReason: spendPaused ? '' : room.pausedReason,
+        budget: {
+          ...room.budget,
+          maxTokens: null,
+          maxCostUsd: null
+        }
+      });
     }
   }
 
@@ -453,16 +484,6 @@ export class RoomBus {
       if (entry && memberIds.has(entry.agentId)) out.add(entry.agentId);
     }
     return [...out];
-  }
-
-  /**
-   * A stall is agents trading messages without changing anything: several
-   * consecutive agent messages with no artifact references between them.
-   */
-  private detectStall(room: Room): boolean {
-    const recent = this.history(room.id, room.budget.stallThreshold);
-    if (recent.length < room.budget.stallThreshold) return false;
-    return recent.every((m) => m.author.kind === 'agent' && m.artifactRefs.length === 0 && !m.system);
   }
 
   private lastAgentSpeaker(roomId: string, candidates: readonly string[]): string | undefined {

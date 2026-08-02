@@ -241,7 +241,19 @@ export class BoardStore {
 
     this.ydoc.transact(() => {
       for (const op of tx.ops) {
-        if (this.applyOne(op, tx.origin)) applied.push(op);
+        // Capture dangling edges before applyOne deletes them from Yjs, so the
+        // emitted op stream includes removeEdge and renderer mirrors stay clean.
+        const cascadeEdges: BoardOp[] =
+          op.op === 'removeNode'
+            ? [...this.yedges.entries()]
+                .filter(
+                  ([, edge]) => edge.from.nodeId === op.id || edge.to.nodeId === op.id
+                )
+                .map(([id]) => ({ op: 'removeEdge' as const, id }))
+            : [];
+        if (this.applyOne(op, tx.origin)) {
+          applied.push(op, ...cascadeEdges);
+        }
       }
     }, origin);
 

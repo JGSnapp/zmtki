@@ -23,6 +23,11 @@ interface EtiquetteRule {
 interface Settings {
   defaultEndpointId: string | null;
   defaultModel: string | null;
+  weakEndpointId: string | null;
+  weakModel: string | null;
+  visionEndpointId: string | null;
+  visionModel: string | null;
+  modelRouting: boolean;
   maxConcurrentTurns: number;
   maxRoundsPerTurn: number;
   temperature: number;
@@ -34,6 +39,7 @@ interface Settings {
   searchResultCount: number;
   googlePseCx: string;
   defaultMaxHops: number;
+  chatFontSize: number;
   artifactEtiquette: EtiquetteRule[];
 }
 
@@ -168,7 +174,12 @@ export function SettingsDialog(): JSX.Element | null {
       submit<ExtensionsSnapshot>({ type: 'extensions.list' })
     ]);
     if (list.ok) setEndpoints(list.value);
-    if (current.ok) setSettings(current.value);
+    if (current.ok) {
+      setSettings(current.value);
+      if (typeof current.value.chatFontSize === 'number') {
+        document.documentElement.style.setProperty('--chat-font-size', `${current.value.chatFontSize}px`);
+      }
+    }
     if (snap.ok) setExtensions(snap.value);
   };
 
@@ -275,9 +286,16 @@ export function SettingsDialog(): JSX.Element | null {
     await reload();
   };
 
+  const applyChatFont = (px: number): void => {
+    document.documentElement.style.setProperty('--chat-font-size', `${px}px`);
+  };
+
   const patch = async (change: Partial<Settings>): Promise<void> => {
     const result = await submit<Settings>({ type: 'settings.set', patch: change });
-    if (result.ok) setSettings(result.value);
+    if (result.ok) {
+      setSettings(result.value);
+      if (typeof result.value.chatFontSize === 'number') applyChatFont(result.value.chatFontSize);
+    }
   };
 
   const etiquetteRules = settings?.artifactEtiquette ?? [];
@@ -772,6 +790,102 @@ export function SettingsDialog(): JSX.Element | null {
             {tab === 'agents' && settings && (
               <div className="settings-scroll">
                 <section className="admin-card">
+                  <div className="admin-card-head">
+                    <div>
+                      <div className="admin-card-title">Роутинг моделей</div>
+                      <div className="admin-card-sub">
+                        Слабая — события доски. Сильная — чат, поиск, файлы, shell. Vision —
+                        скриншоты доски (`board_screenshot`); если не задана, берётся сильная.
+                      </div>
+                    </div>
+                  </div>
+                  <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.modelRouting !== false}
+                      onChange={(e) => void patch({ modelRouting: e.target.checked })}
+                    />
+                    Включить роутинг weak → strong / vision
+                  </label>
+                  <label className="field">
+                    Слабый эндпоинт
+                    <select
+                      value={settings.weakEndpointId ?? ''}
+                      onChange={(e) =>
+                        void patch({
+                          weakEndpointId: e.target.value || null,
+                          weakModel: e.target.value ? settings.weakModel : null
+                        })
+                      }
+                    >
+                      <option value="">Как сильный (default)</option>
+                      {endpoints.map((ep) => (
+                        <option key={ep.id} value={ep.id}>
+                          {ep.label || ep.id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Слабая модель
+                    <select
+                      value={settings.weakModel ?? ''}
+                      disabled={!settings.weakEndpointId && !settings.defaultEndpointId}
+                      onChange={(e) => void patch({ weakModel: e.target.value || null })}
+                    >
+                      <option value="">Не выбрана</option>
+                      {(
+                        endpoints.find((ep) => ep.id === (settings.weakEndpointId || settings.defaultEndpointId))
+                          ?.models ?? []
+                      ).map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Vision-эндпоинт
+                    <select
+                      value={settings.visionEndpointId ?? ''}
+                      onChange={(e) =>
+                        void patch({
+                          visionEndpointId: e.target.value || null,
+                          visionModel: e.target.value ? settings.visionModel : null
+                        })
+                      }
+                    >
+                      <option value="">Как сильный (default)</option>
+                      {endpoints.map((ep) => (
+                        <option key={ep.id} value={ep.id}>
+                          {ep.label || ep.id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Vision-модель
+                    <select
+                      value={settings.visionModel ?? ''}
+                      disabled={!settings.visionEndpointId && !settings.defaultEndpointId}
+                      onChange={(e) => void patch({ visionModel: e.target.value || null })}
+                    >
+                      <option value="">Не выбрана (= сильная)</option>
+                      {(
+                        endpoints.find((ep) => ep.id === (settings.visionEndpointId || settings.defaultEndpointId))
+                          ?.models ?? []
+                      ).map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="admin-card-sub" style={{ marginTop: 8 }}>
+                    Сильная модель задаётся в «Провайдеры» (default) и у каждого агента в чате.
+                  </div>
+                </section>
+                <section className="admin-card">
                   <label className="field">
                     Одновременных ходов
                     <input
@@ -838,6 +952,23 @@ export function SettingsDialog(): JSX.Element | null {
                       value={settings.temperature}
                       onChange={(e) => void patch({ temperature: Number(e.target.value) })}
                     />
+                  </label>
+                  <label className="field">
+                    Размер шрифта в чате
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <input
+                        type="range"
+                        min={11}
+                        max={18}
+                        step={1}
+                        value={settings.chatFontSize ?? 13}
+                        onChange={(e) => void patch({ chatFontSize: Number(e.target.value) })}
+                        style={{ flex: 1 }}
+                      />
+                      <span style={{ minWidth: 42, fontSize: 12, color: 'var(--text-dim)' }}>
+                        {settings.chatFontSize ?? 13}px
+                      </span>
+                    </div>
                   </label>
                 </section>
               </div>

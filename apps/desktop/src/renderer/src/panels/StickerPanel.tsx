@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { setStickerDragData } from '../stickers/drag.js';
 import { stickerImgSrc } from '../stickers/quickStickers.js';
 import { submit, useStore } from '../store.js';
 
@@ -50,12 +51,6 @@ export function StickerPanel({ open, onClose }: { open: boolean; onClose: () => 
     await reload();
   };
 
-  const place = async (packId: string, stickerId: string): Promise<void> => {
-    if (!boardId) return;
-    await submit({ type: 'stickers.place', boardId, packId, stickerId });
-    onClose();
-  };
-
   const addFromPath = async (packId: string): Promise<void> => {
     const sourcePath = window.prompt('Путь к PNG/WebP файлу стикера');
     if (!sourcePath) return;
@@ -82,6 +77,7 @@ export function StickerPanel({ open, onClose }: { open: boolean; onClose: () => 
           ×
         </button>
       </div>
+      <div className="hint">Перетащите стикер на доску</div>
       {msg && <div className="hint">{msg}</div>}
       <div className="sticker-create">
         <input
@@ -108,11 +104,16 @@ export function StickerPanel({ open, onClose }: { open: boolean; onClose: () => 
               {pack.stickers.map((s) => (
                 <button
                   key={s.id}
+                  type="button"
                   className="sticker-cell"
-                  title={s.emoji ?? s.id}
-                  onClick={() => void place(pack.id, s.id)}
+                  title={`${s.emoji ?? s.id} — перетащите на доску`}
+                  disabled={!boardId}
+                  draggable={Boolean(boardId)}
+                  onDragStart={(e) =>
+                    setStickerDragData(e, { packId: pack.id, stickerId: s.id })
+                  }
                 >
-                  <img src={stickerImgSrc(pack.id, s.id, s.src)} alt={s.emoji ?? s.id} />
+                  <img src={stickerImgSrc(pack.id, s.id, s.src)} alt={s.emoji ?? s.id} draggable={false} />
                 </button>
               ))}
             </div>

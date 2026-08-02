@@ -1,3 +1,5 @@
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { newId, type Agent } from '@zmtki/board-schema';
 import type { ActivityEntry, EventMsg, TurnUsage } from '@zmtki/protocol';
 import { formatArtifactEtiquette, type AppSettings } from '../app/settings.js';
@@ -13,6 +15,42 @@ import { ContextAssembler } from './ContextAssembler.js';
 import type { ExtensionHost } from '../extensions/McpHub.js';
 import { buildPromptTiers, buildSubagentPrompt, tiersToMessages } from './prompts.js';
 import { RolloutRecorder } from './RolloutRecorder.js';
+
+const execAsync = promisify(exec);
+
+/** Tools that need the strong model (search, shell, code, delegation). */
+const STRONG_TOOLS = new Set([
+  'web_search',
+  'web_fetch',
+  'shell',
+  'write_file',
+  'apply_patch',
+  'search_files',
+  'read_file',
+  'list_files',
+  'show_file',
+  'skill_read',
+  'delegate_task',
+  'task_assign',
+  'portal_create',
+  'memory_write'
+]);
+
+/** Tools whose results include images — escalate to the vision model. */
+const VISION_TOOLS = new Set(['board_screenshot']);
+
+type ModelTier = 'weak' | 'strong' | 'vision';
+
+function needsStrongModel(name: string): boolean {
+  if (STRONG_TOOLS.has(name) || VISION_TOOLS.has(name)) return true;
+  // MCP / extension tools are treated as heavy.
+  if (name.startsWith('mcp_') || name.includes('__')) return true;
+  return false;
+}
+
+function needsVisionModel(name: string): boolean {
+  return VISION_TOOLS.has(name);
+}
 
 export interface TurnInput {
   /** What kicked the turn off: a human message, a mention, or a comment. */
@@ -42,7 +80,7 @@ export interface AgentRuntimeDeps {
   services: ToolServices;
   listAgents: () => Agent[];
   getAgent: (agentId: string) => Agent | undefined;
-  setAgentStatus: (agentId: string, status: Agent['status']) => void;
+  setAgentStatus: (agentId: string, status: Agent['status'], headline?: string) => void;
   approvals: ApprovalBroker;
   extensions?: ExtensionHost;
 }
@@ -127,7 +165,10 @@ export class AgentRuntime {
     this.emit({ type: 'turn.started', agentId, turnId, roomId: input.roomId ?? null });
 
     try {
-      const result = await this.loop(agent, turnId, input, controller);
+      const result =
+        agent.bridge?.kind && agent.bridge.kind !== 'builtin'
+          ? await this.runBridgeTurn(agent, turnId, input, controller)
+          : await this.loop(agent, turnId, input, controller);
       result.usage.rounds = result.rounds;
       result.usage.durationMs = Date.now() - startedAt;
       this.emit({
@@ -162,11 +203,12 @@ export class AgentRuntime {
     controller: AbortController
   ): Promise<TurnResult> {
     const settings = this.deps.settings();
-    const endpoints = this.resolveEndpoints(agent, settings);
+    let tier = this.pickInitialTier(input, settings);
+    let endpoints = this.resolveEndpoints(agent, settings, tier);
     if (endpoints.length === 0) {
       throw new Error('не настроен ни один LLM-эндпоинт — добавь его в настройках');
     }
-    if (!endpoints.some((endpoint) => this.pickModel(agent, endpoint, settings))) {
+    if (!endpoints.some((endpoint) => this.pickModel(agent, endpoint, settings, tier))) {
       throw new Error('не выбрана модель — откройте Настройки → Провайдеры и выберите модель');
     }
 
@@ -196,7 +238,9 @@ export class AgentRuntime {
         endpoints,
         messages,
         this.schemasFor(toolsets),
-        controller.signal
+        controller.signal,
+        tier,
+        settings
       );
 
       accumulate(usage, roundUsage);
@@ -215,6 +259,23 @@ export class AgentRuntime {
         return { turnId, finalText, usage, rounds, stopReason: 'done', postedRoomIds: [...postedRoomIds] };
       }
 
+      if (tier === 'weak' && calls.some((c) => needsStrongModel(c.name))) {
+        const next: ModelTier = calls.some((c) => needsVisionModel(c.name)) ? 'vision' : 'strong';
+        tier = next;
+        endpoints = this.resolveEndpoints(agent, settings, next);
+        if (endpoints.length === 0) {
+          return {
+            turnId,
+            finalText,
+            usage,
+            rounds,
+            stopReason: 'error',
+            error: 'нет сильной модели для эскалации',
+            postedRoomIds: [...postedRoomIds]
+          };
+        }
+      }
+
       this.deps.setAgentStatus(agent.id, 'running');
       const results = await this.executeCalls(agent, turnId, calls, controller);
       for (const { call, result } of results) {
@@ -226,16 +287,38 @@ export class AgentRuntime {
           /* ignore */
         }
       }
-      await this.rollouts.append(
-        agent.id,
-        turnId,
-        results.map((r) => ({
-          role: 'tool' as const,
+
+      if (results.some((r) => (r.result.images?.length ?? 0) > 0) && tier !== 'vision') {
+        tier = 'vision';
+        endpoints = this.resolveEndpoints(agent, settings, 'vision');
+      }
+
+      const followUp: ChatMessage[] = [];
+      for (const r of results) {
+        followUp.push({
+          role: 'tool',
           content: r.result.content,
           toolCallId: r.call.id,
           name: r.call.name
-        }))
-      );
+        });
+        if (r.result.images && r.result.images.length > 0) {
+          followUp.push({
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `[скриншот от ${r.call.name}] Ниже изображение доски. Оцени раскладку, зазоры и стрелки; при необходимости поправь.`
+              },
+              ...r.result.images.map((img) => ({
+                type: 'image' as const,
+                mime: img.mime,
+                base64: img.base64
+              }))
+            ]
+          });
+        }
+      }
+      await this.rollouts.append(agent.id, turnId, followUp);
 
       const steered = await this.drainSteer(agent.id, turnId);
       if (steered) continue;
@@ -255,6 +338,109 @@ export class AgentRuntime {
       stopReason: 'maxRounds',
       postedRoomIds: [...postedRoomIds]
     };
+  }
+
+  /**
+   * External agent bridge: forward the human message to an MCP chat tool or a
+   * shell command (Claude Code / Cursor / custom CLI), then post the reply.
+   */
+  private async runBridgeTurn(
+    agent: Agent,
+    turnId: string,
+    input: TurnInput,
+    controller: AbortController
+  ): Promise<TurnResult> {
+    this.deps.setAgentStatus(agent.id, 'running');
+    this.onActivity.emit({
+      agentId: agent.id,
+      boardId: this.deps.board.id,
+      status: 'running',
+      headline: `Внешний агент (${agent.bridge.kind})…`,
+      nodeId: null,
+      updatedAt: Date.now()
+    });
+
+    let finalText = '';
+    let error: string | undefined;
+
+    try {
+      if (agent.bridge.kind === 'mcp') {
+        finalText = await this.runMcpBridge(agent, input.text, controller.signal);
+      } else if (agent.bridge.kind === 'command') {
+        finalText = await this.runCommandBridge(agent, input.text, controller.signal);
+      } else {
+        error = 'неизвестный тип bridge';
+      }
+    } catch (err) {
+      error = (err as Error).message;
+    }
+
+    if (controller.signal.aborted) {
+      return { turnId, finalText, usage: emptyUsage(), rounds: 1, stopReason: 'aborted' };
+    }
+
+    if (error) {
+      finalText = finalText || `Ошибка внешнего агента: ${error}`;
+    }
+
+    if (input.roomId && finalText) {
+      await this.deps.services.rooms.send({
+        roomId: input.roomId,
+        agentId: agent.id,
+        body: finalText
+      });
+    }
+
+    return {
+      turnId,
+      finalText,
+      usage: emptyUsage(),
+      rounds: 1,
+      stopReason: error ? 'error' : 'done',
+      ...(error ? { error } : {}),
+      ...(input.roomId ? { postedRoomIds: [input.roomId] } : {})
+    };
+  }
+
+  private async runMcpBridge(agent: Agent, message: string, signal: AbortSignal): Promise<string> {
+    const host = this.deps.extensions;
+    if (!host) throw new Error('MCP недоступен');
+    const server = agent.bridge.mcpServer.trim();
+    if (!server) throw new Error('укажи MCP-сервер у агента (bridge.mcpServer)');
+    const tool = host.resolveChatTool(server, agent.bridge.mcpTool.trim());
+    if (!tool) throw new Error(`у MCP-сервера «${server}» нет инструментов (или он не запущен)`);
+    if (signal.aborted) throw new Error('отменено');
+    const full = `mcp__${server}__${tool}`;
+    const result = await host.callMcpTool(full, {
+      message,
+      prompt: message,
+      text: message,
+      query: message,
+      agentId: agent.id,
+      boardPath: this.deps.boardPath
+    });
+    if (result.isError) throw new Error(result.content);
+    return result.content || '(пустой ответ MCP)';
+  }
+
+  private async runCommandBridge(agent: Agent, message: string, signal: AbortSignal): Promise<string> {
+    const template = agent.bridge.command.trim();
+    if (!template) {
+      throw new Error('укажи команду у агента (bridge.command), например: claude -p "{message}"');
+    }
+    const escaped = message.replace(/"/g, '\\"');
+    const cmd = template.includes('{message}')
+      ? template.split('{message}').join(escaped)
+      : `${template} ${JSON.stringify(message)}`;
+    if (signal.aborted) throw new Error('отменено');
+    const { stdout, stderr } = await execAsync(cmd, {
+      cwd: this.deps.boardPath,
+      timeout: 10 * 60 * 1000,
+      maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true
+    });
+    const out = [stdout, stderr].map((s) => s?.trim()).filter(Boolean).join('\n\n');
+    return out || '(команда завершилась без вывода)';
   }
 
   private buildTiers(agent: Agent, turnText = '') {
@@ -300,7 +486,35 @@ export class AgentRuntime {
     return [...base, ...this.deps.extensions.mcpSchemas()];
   }
 
-  private resolveEndpoints(agent: Agent, settings: AppSettings): ResolvedEndpoint[] {
+  private pickInitialTier(input: TurnInput, settings: AppSettings): ModelTier {
+    if (!settings.modelRouting) return 'strong';
+    if (!settings.weakEndpointId && !settings.weakModel) return 'strong';
+    if (input.source === 'system' && input.text.includes('[board.event:')) return 'weak';
+    if (input.source === 'system' && input.text.length < 280) return 'weak';
+    return 'strong';
+  }
+
+  private resolveEndpoints(agent: Agent, settings: AppSettings, tier: ModelTier): ResolvedEndpoint[] {
+    if (tier === 'weak') {
+      const weakId = settings.weakEndpointId || settings.defaultEndpointId;
+      if (!weakId) return this.resolveEndpoints(agent, settings, 'strong');
+      const resolved = this.deps.endpoints.resolve(weakId);
+      return resolved ? [resolved] : this.resolveEndpoints(agent, settings, 'strong');
+    }
+
+    if (tier === 'vision') {
+      const visionId = settings.visionEndpointId || settings.defaultEndpointId;
+      if (settings.visionEndpointId) {
+        const resolved = this.deps.endpoints.resolve(settings.visionEndpointId);
+        if (resolved) return [resolved];
+      }
+      if (visionId) {
+        const resolved = this.deps.endpoints.resolve(visionId);
+        if (resolved) return [resolved];
+      }
+      return this.resolveEndpoints(agent, settings, 'strong');
+    }
+
     const ids = [
       agent.model.endpointId || settings.defaultEndpointId,
       ...agent.model.fallbacks.map((f) => f.endpointId)
@@ -314,10 +528,35 @@ export class AgentRuntime {
       const resolved = this.deps.endpoints.resolve(id);
       if (resolved) out.push(resolved);
     }
+    // Stale defaultEndpointId / agent.model.endpointId used to yield an empty
+    // list even when ChatGPT (or another provider) was clearly connected.
+    if (out.length === 0) {
+      for (const endpoint of this.deps.endpoints.list()) {
+        if (seen.has(endpoint.id)) continue;
+        const resolved = this.deps.endpoints.resolve(endpoint.id);
+        if (resolved) out.push(resolved);
+      }
+    }
     return out;
   }
 
-  private pickModel(agent: Agent, endpoint: ResolvedEndpoint, settings: AppSettings): string {
+  private pickModel(
+    agent: Agent,
+    endpoint: ResolvedEndpoint,
+    settings: AppSettings,
+    tier: ModelTier
+  ): string {
+    if (tier === 'weak') {
+      if (settings.weakModel) return settings.weakModel;
+      if (settings.defaultModel) return settings.defaultModel;
+      return this.deps.endpoints.find(endpoint.id)?.models[0] ?? '';
+    }
+    if (tier === 'vision') {
+      if (settings.visionModel) return settings.visionModel;
+      if (settings.defaultModel) return settings.defaultModel;
+      if (agent.model.model) return agent.model.model;
+      return this.deps.endpoints.find(endpoint.id)?.models[0] ?? '';
+    }
     if (agent.model.endpointId === endpoint.id && agent.model.model) return agent.model.model;
     const fallback = agent.model.fallbacks.find((f) => f.endpointId === endpoint.id);
     if (fallback?.model) return fallback.model;
@@ -332,16 +571,17 @@ export class AgentRuntime {
     endpoints: readonly ResolvedEndpoint[],
     messages: ChatMessage[],
     tools: CompletionRequest['tools'],
-    signal: AbortSignal
+    signal: AbortSignal,
+    tier: ModelTier,
+    settings: AppSettings
   ): Promise<{ text: string; reasoning: string; calls: ToolCall[]; roundUsage: Usage }> {
-    const settings = this.deps.settings();
     let text = '';
     let reasoning = '';
     let calls: ToolCall[] = [];
     let roundUsage: Usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0 };
 
     const requestFor = (endpoint: ResolvedEndpoint): CompletionRequest => ({
-      model: this.pickModel(agent, endpoint, settings),
+      model: this.pickModel(agent, endpoint, settings, tier),
       messages,
       tools,
       temperature: settings.temperature,
@@ -427,14 +667,25 @@ export class AgentRuntime {
     if (!tool) {
       if (this.deps.extensions?.isMcpTool(call.name)) {
         if (agent.approvalPolicy !== 'never') {
-          const approved = await this.deps.approvals.ask({
-            agentId: agent.id,
-            boardId: this.deps.board.id,
-            kind: 'exec',
-            title: `MCP: ${call.name}`,
-            detail: call.arguments.slice(0, 500),
-            subject: call.name
-          });
+          this.deps.setAgentStatus(agent.id, 'waitingApproval', `MCP: ${call.name}`);
+          let approved = false;
+          try {
+            approved = await this.deps.approvals.ask(
+              {
+                agentId: agent.id,
+                boardId: this.deps.board.id,
+                kind: 'exec',
+                title: `MCP: ${call.name}`,
+                detail: call.arguments.slice(0, 500),
+                subject: call.name
+              },
+              { signal: controller.signal, timeoutMs: 120_000 }
+            );
+          } finally {
+            if (!controller.signal.aborted) {
+              this.deps.setAgentStatus(agent.id, 'running');
+            }
+          }
           if (!approved) {
             const result = { content: 'отклонено пользователем', isError: true };
             this.emitToolEnd(agent.id, turnId, call, result, startedAt);
@@ -487,19 +738,34 @@ export class AgentRuntime {
             resultPreview: text.slice(0, 400)
           }
         }),
-      requestApproval: (ask) =>
-        this.deps.approvals.ask({
-          agentId: agent.id,
-          boardId: this.deps.board.id,
-          kind: ask.kind,
-          title: ask.title,
-          detail: ask.detail,
-          subject: ask.subject
-        })
+      requestApproval: async (ask) => {
+        this.deps.setAgentStatus(agent.id, 'waitingApproval', ask.title);
+        try {
+          return await this.deps.approvals.ask(
+            {
+              agentId: agent.id,
+              boardId: this.deps.board.id,
+              kind: ask.kind,
+              title: ask.title,
+              detail: ask.detail,
+              subject: ask.subject
+            },
+            {
+              signal: controller.signal,
+              // Invisible / missed approval cards must not freeze the turn.
+              timeoutMs: 120_000
+            }
+          );
+        } finally {
+          if (!controller.signal.aborted) {
+            this.deps.setAgentStatus(agent.id, 'running');
+          }
+        }
+      }
     };
 
     try {
-      const result = await tool.handler(args, ctx);
+      const result = await raceTool(tool.handler(args, ctx), controller.signal, call.name, toolTimeoutMs(call.name));
       this.emitToolEnd(agent.id, turnId, call, result, startedAt);
       this.onActivity.emit({
         agentId: agent.id,
@@ -559,7 +825,7 @@ export class AgentRuntime {
    */
   async runSubagent(parent: Agent, brief: string, contextText: string): Promise<{ summary: string; error?: string }> {
     const settings = this.deps.settings();
-    const endpoints = this.resolveEndpoints(parent, settings);
+    const endpoints = this.resolveEndpoints(parent, settings, 'strong');
     if (endpoints.length === 0) return { summary: '', error: 'нет LLM-эндпоинта' };
 
     const controller = new AbortController();
@@ -574,7 +840,9 @@ export class AgentRuntime {
         endpoints,
         messages,
         toolRegistry.schemasFor(['files', 'web']),
-        controller.signal
+        controller.signal,
+        'strong',
+        settings
       );
       if (text) summary = text;
       if (calls.length === 0) break;
@@ -616,4 +884,45 @@ function accumulate(target: TurnUsage, delta: Usage): void {
   target.completionTokens += delta.completionTokens;
   target.totalTokens += delta.totalTokens;
   target.cachedTokens += delta.cachedTokens;
+}
+
+/** Board geometry tools should finish instantly; long hangs mean a stuck await. */
+function toolTimeoutMs(name: string): number {
+  if (name === 'shell' || name === 'web_fetch' || name.startsWith('mcp_')) return 10 * 60_000;
+  if (name.startsWith('board_') || name.startsWith('sticker')) return 20_000;
+  return 3 * 60_000;
+}
+
+function raceTool<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+  name: string,
+  timeoutMs: number
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('ход прерван пользователем'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      reject(new Error(`${name}: таймаут ${Math.round(timeoutMs / 1000)}с — вызов прерван`));
+    }, timeoutMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('ход прерван пользователем'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
 }

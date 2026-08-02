@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { setStickerDragData } from '../stickers/drag.js';
 import { pickQuickStickers, type QuickSticker } from '../stickers/quickStickers.js';
 import { submit, useStore, type ToolName } from '../store.js';
 import { StickerPanel } from './StickerPanel.js';
@@ -84,16 +85,6 @@ export function Toolbar(): JSX.Element {
     }
   };
 
-  const placeQuick = (s: QuickSticker): void => {
-    if (!boardId) return;
-    void submit({
-      type: 'stickers.place',
-      boardId,
-      packId: s.packId,
-      stickerId: s.stickerId
-    });
-  };
-
   return (
     <div className="toolbar">
       {TOOLS.map((entry) => (
@@ -114,9 +105,10 @@ export function Toolbar(): JSX.Element {
           key={`${s.packId}:${s.stickerId}`}
           type="button"
           className="tool tool-sticker"
-          title={s.emoji ? `${s.emoji} — на доску` : 'Стикер на доску'}
+          title={s.emoji ? `${s.emoji} — перетащите на доску` : 'Перетащите на доску'}
           disabled={!boardId}
-          onClick={() => placeQuick(s)}
+          draggable={Boolean(boardId)}
+          onDragStart={(e) => setStickerDragData(e, { packId: s.packId, stickerId: s.stickerId })}
         >
           <img src={s.src} alt={s.emoji ?? s.stickerId} draggable={false} />
         </button>

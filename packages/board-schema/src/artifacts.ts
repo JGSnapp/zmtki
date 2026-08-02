@@ -104,12 +104,75 @@ export const MarkdownArtifactSchema = z.object({
   text: z.string().default('')
 });
 
+/** Plain text notepad the human can edit in place. */
+export const NoteArtifactSchema = z.object({
+  kind: z.literal('note'),
+  ...base,
+  text: z.string().default('')
+});
+
+export const DocBlockSchema = z.object({
+  id: z.string(),
+  type: z.enum(['heading', 'paragraph', 'bullet', 'todo', 'code', 'divider']),
+  text: z.string().default(''),
+  /** Heading level 1–3. */
+  level: z.number().int().min(1).max(3).optional(),
+  checked: z.boolean().optional(),
+  language: z.string().optional()
+});
+export type DocBlock = z.infer<typeof DocBlockSchema>;
+
+/** Notion-like block document editable by humans and agents. */
+export const BlocksArtifactSchema = z.object({
+  kind: z.literal('blocks'),
+  ...base,
+  blocks: z.array(DocBlockSchema).default([])
+});
+
+/** Simple in-place code editor for humans and agents. */
+export const CodePadArtifactSchema = z.object({
+  kind: z.literal('codePad'),
+  ...base,
+  language: z.string().default('plaintext'),
+  content: z.string().default('')
+});
+
 export const ImageArtifactSchema = z.object({
   kind: z.literal('image'),
   ...base,
   source: PayloadRefSchema,
   alt: z.string().default(''),
   fit: z.enum(['contain', 'cover']).default('contain')
+});
+
+/** Interactive map (OpenStreetMap embed by default). */
+export const MapArtifactSchema = z.object({
+  kind: z.literal('map'),
+  ...base,
+  lat: z.number().min(-90).max(90).default(55.75),
+  lng: z.number().min(-180).max(180).default(37.62),
+  zoom: z.number().min(1).max(19).default(12),
+  label: z.string().default(''),
+  /** Optional custom embed URL; when set, lat/lng/zoom are ignored. */
+  embedUrl: z.string().default('')
+});
+
+/** Audio / music player. */
+export const MusicArtifactSchema = z.object({
+  kind: z.literal('music'),
+  ...base,
+  url: z.string().default(''),
+  track: z.string().default(''),
+  artist: z.string().default(''),
+  coverUrl: z.string().default('')
+});
+
+/** Video player (direct file or YouTube/Vimeo URL). */
+export const VideoArtifactSchema = z.object({
+  kind: z.literal('video'),
+  ...base,
+  url: z.string().default(''),
+  poster: z.string().default('')
 });
 
 export const TableArtifactSchema = z.object({
@@ -260,6 +323,34 @@ export const DemoArtifactSchema = z.object({
   running: z.boolean().default(false)
 });
 
+/**
+ * Live application surface on the board.
+ *
+ * - `web` — interactive Electron WebContentsView overlaid on the node (true embed).
+ * - `headless` — hidden WebContents; frames streamed to the node (agent browser).
+ * - `mirror` — capture of a real OS window/screen via desktopCapturer.
+ */
+export const AppViewModeSchema = z.enum(['web', 'headless', 'mirror']);
+export type AppViewMode = z.infer<typeof AppViewModeSchema>;
+
+export const AppViewArtifactSchema = z.object({
+  kind: z.literal('appView'),
+  ...base,
+  mode: AppViewModeSchema.default('web'),
+  /** Target URL for web / headless modes. */
+  url: z.string().default('about:blank'),
+  /** desktopCapturer source id for mirror mode. */
+  sourceId: z.string().default(''),
+  sourceName: z.string().default(''),
+  /** Capture / stream rate for headless and mirror. */
+  fps: z.number().int().min(1).max(30).default(8),
+  /** When false, web mode shows poster/frames only (no overlay). */
+  live: z.boolean().default(true),
+  running: z.boolean().default(false),
+  /** Last error from navigate/capture (surfaced to human + agent). */
+  error: z.string().default('')
+});
+
 /** A live, read-only mirror of an artifact that lives on another board. */
 export const PortalArtifactSchema = z.object({
   kind: z.literal('portal'),
@@ -277,7 +368,13 @@ export const ArtifactSpecSchema = z.discriminatedUnion('kind', [
   FileFragmentArtifactSchema,
   DiffArtifactSchema,
   MarkdownArtifactSchema,
+  NoteArtifactSchema,
+  BlocksArtifactSchema,
+  CodePadArtifactSchema,
   ImageArtifactSchema,
+  MapArtifactSchema,
+  MusicArtifactSchema,
+  VideoArtifactSchema,
   TableArtifactSchema,
   KanbanArtifactSchema,
   StatusArtifactSchema,
@@ -288,6 +385,7 @@ export const ArtifactSpecSchema = z.discriminatedUnion('kind', [
   HtmlWidgetArtifactSchema,
   ControlsArtifactSchema,
   DemoArtifactSchema,
+  AppViewArtifactSchema,
   PortalArtifactSchema
 ]);
 
@@ -301,7 +399,13 @@ export const ARTIFACT_KINDS = [
   'fileFragment',
   'diff',
   'markdown',
+  'note',
+  'blocks',
+  'codePad',
   'image',
+  'map',
+  'music',
+  'video',
   'table',
   'kanban',
   'status',
@@ -312,6 +416,7 @@ export const ARTIFACT_KINDS = [
   'htmlWidget',
   'controls',
   'demo',
+  'appView',
   'portal'
 ] as const satisfies readonly ArtifactKind[];
 
@@ -322,7 +427,13 @@ export const DEFAULT_ARTIFACT_SIZE: Record<ArtifactKind, { w: number; h: number 
   fileFragment: { w: 480, h: 260 },
   diff: { w: 560, h: 380 },
   markdown: { w: 420, h: 260 },
+  note: { w: 360, h: 240 },
+  blocks: { w: 480, h: 360 },
+  codePad: { w: 520, h: 320 },
   image: { w: 420, h: 300 },
+  map: { w: 480, h: 360 },
+  music: { w: 360, h: 160 },
+  video: { w: 560, h: 360 },
   table: { w: 520, h: 300 },
   kanban: { w: 720, h: 400 },
   status: { w: 320, h: 200 },
@@ -333,6 +444,7 @@ export const DEFAULT_ARTIFACT_SIZE: Record<ArtifactKind, { w: number; h: number 
   htmlWidget: { w: 520, h: 360 },
   controls: { w: 360, h: 320 },
   demo: { w: 640, h: 440 },
+  appView: { w: 720, h: 480 },
   portal: { w: 420, h: 280 }
 };
 
@@ -348,6 +460,11 @@ export function summarizeArtifact(spec: ArtifactSpec): string {
         : 'terminal';
     case 'browser':
       return spec.url;
+    case 'appView':
+      if (spec.mode === 'mirror') {
+        return `mirror: ${spec.sourceName || spec.sourceId || 'window'}`;
+      }
+      return `${spec.mode}: ${spec.url}`;
     case 'file':
       return spec.path;
     case 'fileFragment':
@@ -356,8 +473,20 @@ export function summarizeArtifact(spec: ArtifactSpec): string {
       return `${spec.path} (+${spec.additions}/-${spec.deletions})`;
     case 'markdown':
       return spec.text.slice(0, 120).replace(/\s+/g, ' ');
+    case 'note':
+      return spec.text.slice(0, 120).replace(/\s+/g, ' ') || 'note';
+    case 'blocks':
+      return `${spec.blocks.length} blocks`;
+    case 'codePad':
+      return `${spec.language}: ${spec.content.slice(0, 80).replace(/\s+/g, ' ')}`;
     case 'image':
       return spec.alt || spec.source.file;
+    case 'map':
+      return spec.label || `${spec.lat.toFixed(4)}, ${spec.lng.toFixed(4)} z${spec.zoom}`;
+    case 'music':
+      return [spec.artist, spec.track || spec.title || spec.url].filter(Boolean).join(' — ');
+    case 'video':
+      return spec.title || spec.url || 'video';
     case 'table':
       return `${spec.rows.length} rows x ${spec.columns.length} cols`;
     case 'kanban':

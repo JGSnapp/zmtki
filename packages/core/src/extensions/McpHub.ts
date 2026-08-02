@@ -106,6 +106,21 @@ export class ExtensionHost {
     return name.startsWith('mcp__');
   }
 
+  /** Pick a chat-like tool on an MCP server (for external agent bridges). */
+  resolveChatTool(serverName: string, preferred = ''): string | null {
+    const live = this.servers.get(serverName);
+    if (!live || live.status !== 'ready' || live.tools.length === 0) return null;
+    if (preferred && live.tools.some((t) => t.name === preferred)) return preferred;
+    const prefer = ['chat', 'ask', 'prompt', 'message', 'agent', 'query', 'complete', 'run'];
+    for (const key of prefer) {
+      const hit = live.tools.find(
+        (t) => t.name.toLowerCase() === key || t.name.toLowerCase().includes(key)
+      );
+      if (hit) return hit.name;
+    }
+    return live.tools[0]?.name ?? null;
+  }
+
   async callMcpTool(
     fullName: string,
     args: Record<string, unknown>

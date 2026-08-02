@@ -28,6 +28,16 @@ export function ProjectRail(): JSX.Element {
     setBusy(false);
   };
 
+  const closeBoard = async (boardId: string, name: string): Promise<void> => {
+    const ok = window.confirm(
+      `Закрыть проект «${name}»?\nФайлы на диске останутся — можно открыть снова.`
+    );
+    if (!ok) return;
+    setBusy(true);
+    await submit({ type: 'workspace.closeBoard', boardId });
+    setBusy(false);
+  };
+
   return (
     <nav className="project-rail">
       {[...boards.values()].map((board) => {
@@ -38,17 +48,38 @@ export function ProjectRail(): JSX.Element {
         ).length;
 
         return (
-          <button
+          <div
             key={board.doc.id}
             className={`rail-item ${board.doc.id === activeBoardId ? 'active' : ''}`}
-            title={board.path}
-            onClick={() => setActiveBoard(board.doc.id)}
+            title={`${board.path}\nПКМ — закрыть проект`}
           >
-            <span className="rail-mark">{board.doc.name.slice(0, 2).toUpperCase()}</span>
-            <span className="rail-name">{board.doc.name}</span>
-            {running > 0 && <span className="rail-running">{running}</span>}
-            {blocking > 0 && <span className="rail-blocking">{blocking}</span>}
-          </button>
+            <button
+              type="button"
+              className="rail-item-main"
+              onClick={() => setActiveBoard(board.doc.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                void closeBoard(board.doc.id, board.doc.name);
+              }}
+            >
+              <span className="rail-mark">{board.doc.name.slice(0, 2).toUpperCase()}</span>
+              <span className="rail-name">{board.doc.name}</span>
+              {running > 0 && <span className="rail-running">{running}</span>}
+              {blocking > 0 && <span className="rail-blocking">{blocking}</span>}
+            </button>
+            <button
+              type="button"
+              className="rail-item-close"
+              title="Закрыть проект"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                void closeBoard(board.doc.id, board.doc.name);
+              }}
+            >
+              ×
+            </button>
+          </div>
         );
       })}
 

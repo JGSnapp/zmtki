@@ -10,17 +10,37 @@ import {
   createStickyNode,
   createTextNode,
   isAgentFrame,
+  isArtifactNode,
+  nearestSides,
   nodesInRect,
   outlineNode,
+  parseEdgeSide,
   rectOf,
   renderPeripheralIndex,
   summarizeArtifact,
   type ArtifactKind,
   type BoardNode,
+  type EdgeSide,
   type FrameNode,
   type ShapeKind
 } from '@zmtki/board-schema';
-import { defineTool, num, objectSchema, str, type ToolContext, type ToolResult } from './registry.js';
+import {
+  collisionCandidates,
+  edgeEndpoints,
+  findEdgeCrossings,
+  findOverlaps,
+  formatSpatialWarning,
+  lineHitsNodes
+} from '../board/SpatialGuards.js';
+import {
+  bool,
+  defineTool,
+  num,
+  objectSchema,
+  str,
+  type ToolContext,
+  type ToolResult
+} from './registry.js';
 
 const MARK_KINDS = ['shape', 'text', 'sticky', 'sticker'] as const;
 const SHAPE_KINDS = ShapeKindSchema.options;
@@ -33,6 +53,61 @@ function requireArtifactNode(ctx: ToolContext, nodeId: string): BoardNode {
   const node = ctx.board.getNode(nodeId);
   if (!node) throw new Error(`узел не найден: ${nodeId}`);
   return node;
+}
+
+/** Smoothly keep the agent's frame wrapped around the nodes it is working on. */
+function ensureFrameCovers(ctx: ToolContext, nodeIds: readonly string[]): void {
+  const frame = agentFrameOf(ctx);
+  if (!frame || !frame.autoGrow) return;
+  const nodes = nodeIds
+    .map((id) => ctx.board.getNode(id))
+    .filter((n): n is BoardNode => Boolean(n) && n!.type !== 'frame');
+  if (nodes.length === 0) return;
+  const pad = 56;
+  const minX = Math.min(...nodes.map((n) => n.position.x)) - pad;
+  const minY = Math.min(...nodes.map((n) => n.position.y)) - pad - 28;
+  const maxX = Math.max(...nodes.map((n) => n.position.x + n.size.w)) + pad;
+  const maxY = Math.max(...nodes.map((n) => n.position.y + n.size.h)) + pad;
+  const next = {
+    position: { x: minX, y: minY },
+    size: { w: Math.max(320, maxX - minX), h: Math.max(240, maxY - minY) }
+  };
+  const samePos =
+    Math.abs(frame.position.x - next.position.x) < 1 &&
+    Math.abs(frame.position.y - next.position.y) < 1;
+  const sameSize =
+    Math.abs(frame.size.w - next.size.w) < 1 && Math.abs(frame.size.h - next.size.h) < 1;
+  if (samePos && sameSize) return;
+  ctx.board.apply({
+    origin: ctx.agent.id,
+    ops: [
+      { op: 'moveNodes', moves: [{ id: frame.id, position: next.position }] },
+      { op: 'resizeNode', id: frame.id, size: next.size }
+    ]
+  });
+}
+
+/**
+ * Spatial conflicts are decided by the agent in the next tool call — not by a
+ * human approval card. Return a blocking tool error unless acceptSpatialRisk.
+ */
+function spatialRiskForAgent(
+  detail: string,
+  accept: boolean,
+  howToFix: string
+): ToolResult | null {
+  if (accept) return null;
+  return {
+    content: [
+      'Геометрический конфликт — действие не выполнено.',
+      detail,
+      '',
+      'Реши сам:',
+      `1) Исправь геометрию: ${howToFix}`,
+      '2) Или повтори тот же вызов с acceptSpatialRisk=true, если осознанно оставляешь как есть.'
+    ].join('\n'),
+    isError: true
+  };
 }
 
 const ARTIFACT_ENVELOPE_KEYS = new Set(['kind', 'title', 'tone', 'props']);
@@ -67,13 +142,15 @@ defineTool({
   description: [
     'Создать артефакт в своей рамке. Следуй артефактному этикету из системного промпта.',
     'Сначала ищи существующий узел (board_search) — update предпочтительнее create; не дублируй то, что уже на доске.',
-    'Дроби работу по kind: код — diff/fileFragment, задачи — todo/kanban, данные — table/chart, схемы — mermaid, UI — htmlWidget/demo.',
+    'Дроби работу по kind: код — diff/fileFragment/codePad, задачи — todo/kanban, данные — table/chart, схемы — mermaid, медиа — map/music/video, UI — htmlWidget/appView/demo, текст — note/blocks/markdown.',
     'Не дублируй terminal/diff — их создают shell и write_file/apply_patch.',
-    'props по kind: markdown {text}; status {headline,detail,progress,fields};',
-    'table {columns,rows}; kanban {columns}; todo {items}; mermaid {source};',
+    'props по kind: markdown {text}; note {text}; blocks {blocks:[{id,type,text,level?,checked?,language?}]};',
+    'codePad {language,content}; map {lat,lng,zoom,label}; music {url,track,artist,coverUrl}; video {url,poster};',
+    'status {headline,detail,progress,fields}; table {columns,rows}; kanban {columns}; todo {items}; mermaid {source};',
     'chart {chartType,labels,series}; link {url,description}; htmlWidget {html};',
     'controls {heading,items:[{id,type,label,action,...}]};',
-    'fileFragment {path,startLine,endLine,content}; demo {url,command}.',
+    'fileFragment {path,startLine,endLine,content}; demo {url,command};',
+    'appView {mode:web|headless|mirror, url?, sourceId?, sourceName?, fps?, live?} — лучше через board_app_embed.',
     'Для размещения относительно других узлов используй board_place вместо пикселей.'
   ].join(' '),
   parameters: objectSchema(
@@ -121,6 +198,7 @@ defineTool({
       createdBy: ctx.agent.id
     });
     ctx.board.apply({ origin: ctx.agent.id, ops: [{ op: 'addNode', node }] });
+    ensureFrameCovers(ctx, [node.id]);
 
     return {
       content: `Создан артефакт ${node.id} (${kind}) в позиции ${Math.round(position.x)},${Math.round(position.y)}.`,
@@ -313,6 +391,7 @@ defineTool({
       origin: ctx.agent.id,
       ops: [{ op: 'updateNode', id: nodeId, patch: { artifact: patch } }]
     });
+    ensureFrameCovers(ctx, [nodeId]);
     return { content: `Артефакт ${nodeId} обновлён.`, nodeId };
   }
 });
@@ -338,6 +417,7 @@ defineTool({
       const nodeId = String(args.nodeId ?? '');
       const node = ctx.board.getNode(nodeId);
       if (!node) return { content: `узел не найден: ${nodeId}`, isError: true };
+      ensureFrameCovers(ctx, [nodeId]);
       if (node.type !== 'artifact') {
         return { content: JSON.stringify(outlineNode(node), null, 2), nodeId };
       }
@@ -359,6 +439,42 @@ defineTool({
     }
 
     return { content: renderPeripheralIndex(doc.nodes) };
+  }
+});
+
+defineTool({
+  name: 'board_screenshot',
+  toolset: 'board',
+  readOnly: true,
+  description: [
+    'Сделать скриншот видимой области доски и вернуть картинку в контекст (vision).',
+    'Используй, чтобы проверить раскладку, зазоры между блоками и читаемость стрелок.',
+    'После скрина при необходимости поправь через board_arrange / board_place / board_connect.'
+  ].join(' '),
+  parameters: objectSchema({
+    scope: str('Что снимать', { enum: ['viewport', 'window'] }),
+    reason: str('Зачем смотришь снимок (кратко)')
+  }),
+  async handler(args, ctx): Promise<ToolResult> {
+    const capture = ctx.services.desktop?.captureBoard;
+    if (!capture) {
+      return {
+        content: 'Скриншот доски недоступен в этом окружении (нет desktop capture).',
+        isError: true
+      };
+    }
+    const scope = args.scope === 'window' ? 'window' : 'viewport';
+    const shot = await capture({ scope });
+    if (!shot) {
+      return { content: 'Не удалось снять доску (окно не готово).', isError: true };
+    }
+    const reason = args.reason ? String(args.reason) : 'проверка раскладки';
+    const size =
+      shot.width && shot.height ? `${shot.width}×${shot.height}` : `${Math.round(shot.base64.length / 1024)}KB`;
+    return {
+      content: `Скриншот доски (${scope}, ${size}). Причина: ${reason}. Картинка приложена следующим сообщением — оцени визуал.`,
+      images: [{ mime: shot.mime, base64: shot.base64 }]
+    };
   }
 });
 
@@ -434,29 +550,79 @@ defineTool({
   readOnly: false,
   description: [
     'Соединить два узла стрелкой с подписью (причинно-следственные связи).',
-    'После нескольких связей вызови board_arrange layout=flow — раскладка с запасом места и минимумом пересечений линий.',
-    'Не связывай «всех со всеми»; давай узлам пространство, чтобы стрелки не путались.'
+    'fromSide/toSide: left|right|top|bottom — явная грань крепления; auto (по умолчанию) — ближайшие грани.',
+    'После набора связей вызови board_arrange layout=graph (как Mermaid) — воздух под подписи стрелок.',
+    'Не связывай «всех со всеми».',
+    'Если стрелка пересекает блоки/другие связи — инструмент вернёт конфликт тебе (не человеку): исправь геометрию или повтори с acceptSpatialRisk=true.'
   ].join(' '),
   parameters: objectSchema(
     {
       fromNodeId: str('Id исходного узла'),
       toNodeId: str('Id целевого узла'),
-      label: str('Подпись связи')
+      label: str('Подпись связи'),
+      fromSide: str('Грань выхода', { enum: ['auto', 'left', 'right', 'top', 'bottom'] }),
+      toSide: str('Грань входа', { enum: ['auto', 'left', 'right', 'top', 'bottom'] }),
+      acceptSpatialRisk: bool(
+        'true = осознанно создать связь несмотря на пересечение блоков/стрелок (после предупреждения инструмента)'
+      )
     },
     ['fromNodeId', 'toNodeId']
   ),
   async handler(args, ctx): Promise<ToolResult> {
     const from = String(args.fromNodeId);
     const to = String(args.toNodeId);
-    if (!ctx.board.getNode(from)) return { content: `узел не найден: ${from}`, isError: true };
-    if (!ctx.board.getNode(to)) return { content: `узел не найден: ${to}`, isError: true };
+    const fromNode = ctx.board.getNode(from);
+    const toNode = ctx.board.getNode(to);
+    if (!fromNode) return { content: `узел не найден: ${from}`, isError: true };
+    if (!toNode) return { content: `узел не найден: ${to}`, isError: true };
+
+    const parsedFrom = parseEdgeSide(args.fromSide);
+    const parsedTo = parseEdgeSide(args.toSide);
+    if (parsedFrom === null) {
+      return { content: 'fromSide: auto|left|right|top|bottom', isError: true };
+    }
+    if (parsedTo === null) {
+      return { content: 'toSide: auto|left|right|top|bottom', isError: true };
+    }
+
+    let fromSide: EdgeSide | null = parsedFrom === 'auto' ? null : parsedFrom;
+    let toSide: EdgeSide | null = parsedTo === 'auto' ? null : parsedTo;
+    // If both auto — leave null (renderer picks nearest as nodes move).
+    // If only one side given, snap the other to the nearest pair partner.
+    if ((fromSide && !toSide) || (!fromSide && toSide)) {
+      const nearest = nearestSides(fromNode, toNode);
+      fromSide ??= nearest.from;
+      toSide ??= nearest.to;
+    }
+
+    const ends = edgeEndpoints(fromNode, toNode, fromSide, toSide);
+    fromSide = ends.fromSide;
+    toSide = ends.toSide;
+    const exclude = new Set([from, to]);
+    const candidates = collisionCandidates(ctx.board.nodes, exclude);
+    const lineHits = lineHitsNodes(ends.from, ends.to, candidates, exclude);
+    const byId = new Map(ctx.board.nodes.map((n) => [n.id, n]));
+    const crossings = findEdgeCrossings(ends.from, ends.to, ctx.board.edges, byId, exclude);
+    if (lineHits.length > 0 || crossings.length > 0) {
+      const detail = formatSpatialWarning({ lineHits, crossings });
+      const blocked = spatialRiskForAgent(
+        detail,
+        args.acceptSpatialRisk === true,
+        'board_place / board_arrange или другие fromSide/toSide'
+      );
+      if (blocked) return blocked;
+    }
+
     const edge = createEdge(from, to, {
       label: String(args.label ?? ''),
-      createdBy: ctx.agent.id
+      createdBy: ctx.agent.id,
+      fromSide,
+      toSide
     });
     ctx.board.apply({ origin: ctx.agent.id, ops: [{ op: 'addEdge', edge }] });
+    const sideNote = ` (${fromSide} → ${toSide})`;
     return {
-      content: `Связь ${from} -> ${to} создана. Если схема разрастается — board_arrange layout=flow.`
+      content: `Связь ${from} -> ${to}${sideNote}. Для схемы со стрелками: board_arrange layout=graph (direction=tb|lr) — как Mermaid, с местом под подписи.`
     };
   }
 });
@@ -466,14 +632,21 @@ defineTool({
   toolset: 'board',
   readOnly: false,
   description: [
-    'Разложить узлы внутри своей рамки (или группы). Не считай пиксели сам.',
-    'Режимы: column, row, grid, stack, flow.',
-    'flow — для схем со стрелками: слои по связям, больше воздуха, меньше пересечений линий. Используй после board_connect.'
+    'Разложить узлы внутри своей рамки (или группы).',
+    'Режимы: column, row, grid, stack, flow, graph.',
+    'graph — как Mermaid: слои по связям, воздух под подписи. direction=tb (сверху вниз) или lr.',
+    'flow — линейный DAG слева→направо. column/row/grid — упаковка без учёта стрелок.',
+    'Отступы: gap, gapX, gapY. Для graph по умолчанию крупные (gapY≈140 при tb).'
   ].join(' '),
   parameters: objectSchema({
-    layout: str('Режим раскладки', { enum: ['column', 'row', 'grid', 'stack', 'flow'] }),
-    gap: num('Отступ между узлами (для flow лучше ≥36)'),
+    layout: str('Режим раскладки', {
+      enum: ['column', 'row', 'grid', 'stack', 'flow', 'graph']
+    }),
+    gap: num('Общий отступ между узлами'),
+    gapX: num('Горизонтальный отступ (между соседями / колонками)'),
+    gapY: num('Вертикальный отступ (между рядами / слоями)'),
     columns: num('Число колонок для grid'),
+    direction: str('Для graph: tb или lr', { enum: ['tb', 'lr'] }),
     containerId: str('Id рамки или группы; по умолчанию твоя рамка')
   }),
   async handler(args, ctx): Promise<ToolResult> {
@@ -488,10 +661,19 @@ defineTool({
 
     const byParent = ctx.board.nodes.filter((n) => n.parentId === containerId);
     const doc = ctx.board.toDoc();
+    // Prefer explicit children. Geometric fallback must NOT pull nodes that
+    // already belong to another group/frame — that left orphan group fills
+    // while members were packed into a line on the parent frame.
     const geometric =
       byParent.length > 0
         ? byParent
-        : nodesInRect(doc, rectOf(container)).filter((n) => n.id !== containerId);
+        : nodesInRect(doc, rectOf(container)).filter(
+            (n) =>
+              n.id !== containerId &&
+              (n.parentId == null || n.parentId === containerId) &&
+              n.type !== 'group' &&
+              n.type !== 'frame'
+          );
     const inside = geometric.filter((n) => !n.locked && n.visualState !== 'ghost');
     if (inside.length === 0) return { content: 'внутри контейнера нечего раскладывать' };
 
@@ -500,9 +682,19 @@ defineTool({
       | 'row'
       | 'grid'
       | 'stack'
-      | 'flow';
+      | 'flow'
+      | 'graph';
     const gap =
-      typeof args.gap === 'number' ? args.gap : mode === 'flow' ? 40 : 24;
+      typeof args.gap === 'number'
+        ? args.gap
+        : mode === 'graph'
+          ? 120
+          : mode === 'flow'
+            ? 80
+            : 24;
+    const gapX = typeof args.gapX === 'number' ? args.gapX : undefined;
+    const gapY = typeof args.gapY === 'number' ? args.gapY : undefined;
+    const direction = args.direction === 'lr' ? 'lr' : 'tb';
     const columns =
       typeof args.columns === 'number' ? args.columns : Math.ceil(Math.sqrt(inside.length));
     const insideIds = new Set(inside.map((n) => n.id));
@@ -516,7 +708,7 @@ defineTool({
       )
       .map((e) => ({ from: e.from.nodeId as string, to: e.to.nodeId as string }));
 
-    const { moves, containerSize } = layoutChildren(
+    const { moves, containerSize, containerPosition } = layoutChildren(
       {
         id: container.id,
         position: container.position,
@@ -524,9 +716,12 @@ defineTool({
         layout: container.layout
       },
       inside,
-      { mode, gap, columns, edges }
+      { mode, gap, gapX, gapY, columns, edges, direction }
     );
 
+    const persistGap = gapY ?? gapX ?? gap;
+    // graph/flow are arrange-only — keep free so later place-inside won't restack.
+    const persistMode = mode === 'flow' || mode === 'graph' ? 'free' : mode;
     const ops = [
       ...inside
         .filter((n) => n.parentId !== containerId)
@@ -538,10 +733,12 @@ defineTool({
       {
         op: 'updateNode' as const,
         id: containerId,
-        // `flow` is not a persisted layout mode — keep a stable column packing hint.
-        patch: { layout: { mode: mode === 'flow' ? 'column' : mode, gap } }
+        patch: { layout: { mode: persistMode, gap: persistGap } }
       },
       ...(moves.length ? [{ op: 'moveNodes' as const, moves }] : []),
+      ...(containerPosition
+        ? [{ op: 'moveNodes' as const, moves: [{ id: container.id, position: containerPosition }] }]
+        : []),
       {
         op: 'resizeNode' as const,
         id: container.id,
@@ -549,8 +746,16 @@ defineTool({
       }
     ];
     ctx.board.apply({ origin: ctx.agent.id, ops });
+    const gapNote = [
+      `gap=${persistGap}`,
+      gapX != null ? `gapX=${gapX}` : null,
+      gapY != null ? `gapY=${gapY}` : null,
+      mode === 'graph' ? `direction=${direction}` : null
+    ]
+      .filter(Boolean)
+      .join(', ');
     return {
-      content: `Разложено ${moves.length} узлов (${mode}).`,
+      content: `Разложено ${moves.length} узлов (${mode}, ${gapNote}).`,
       nodeId: container.id
     };
   }
@@ -591,7 +796,8 @@ defineTool({
   name: 'board_delete',
   toolset: 'board',
   readOnly: false,
-  description: 'Удалить артефакт. Чужие и locked-for-delete узлы недоступны без снятия защиты.',
+  description:
+    'Удалить артефакт с доски. Предпочтительный способ убрать ненужное — не архивируй (ghost), если пользователь не просил сохранить в архиве. Чужие и locked-for-delete узлы недоступны без снятия защиты.',
   parameters: objectSchema({ nodeId: str('Id артефакта') }, ['nodeId']),
   async handler(args, ctx): Promise<ToolResult> {
     const { checkNodeAction } = await import('../board/OwnershipLocks.js');
@@ -665,7 +871,9 @@ defineTool({
   readOnly: false,
   description: [
     'Создать или переместить артефакт относительно другого узла / внутрь рамки или группы.',
-    'relation: inside | rightOf | leftOf | below | above. Не задавай пиксели.'
+    'relation: inside | rightOf | leftOf | below | above. Не задавай пиксели.',
+    'gap — расстояние до опоры (для связанных узлов лучше ≥48).',
+    'При перекрытии блоков инструмент вернёт конфликт тебе: смени place/gap или повтори с acceptSpatialRisk=true.'
   ].join(' '),
   parameters: objectSchema(
     {
@@ -678,13 +886,17 @@ defineTool({
       relation: str('Отношение', {
         enum: ['inside', 'rightOf', 'leftOf', 'below', 'above']
       }),
+      gap: num('Отступ до опорного узла (px); по умолчанию 24, для схем ≥48'),
       containerId: str('Явный контейнер (frame/group) для inside'),
-      slot: str('Имя слота layout')
+      slot: str('Имя слота layout'),
+      acceptSpatialRisk: bool(
+        'true = осознанно разместить поверх других блоков (после предупреждения инструмента)'
+      )
     },
     ['relation']
   ),
   async handler(args, ctx): Promise<ToolResult> {
-    const { relativePosition, layoutChildren } = await import('../board/SpatialLayoutEngine.js');
+    const { relativePosition, wrapBounds } = await import('../board/SpatialLayoutEngine.js');
     const { createGroupNode } = await import('@zmtki/board-schema');
     void createGroupNode;
     const relation = String(args.relation) as
@@ -702,7 +914,7 @@ defineTool({
         return { content: 'для создания укажи kind', isError: true };
       }
       const parsed = ArtifactSpecSchema.safeParse({
-        ...collectProps(args, ['nodeId', 'relativeTo', 'relation', 'containerId', 'slot']),
+        ...collectProps(args, ['nodeId', 'relativeTo', 'relation', 'containerId', 'slot', 'gap']),
         kind,
         title: String(args.title ?? ''),
         tone: args.tone ?? 'idle'
@@ -739,31 +951,56 @@ defineTool({
         ...ctx.board.nodes.filter((n) => n.parentId === containerId && n.id !== node.id),
         { ...node, parentId: containerId }
       ];
-      const { moves, containerSize } = layoutChildren(
+      const placeGap = typeof args.gap === 'number' ? args.gap : container.layout?.gap ?? 24;
+      // Never restack siblings here — that turned mindmaps into a vertical line.
+      // Packing is opt-in via board_arrange / board_group layout=….
+      const others = siblings.filter((n) => n.id !== node.id);
+      let nextPos = node.position;
+      if (others.length > 0) {
+        const anchor = others[others.length - 1]!;
+        nextPos = relativePosition(anchor, 'below', node.size, placeGap);
+      }
+      const working = siblings.map((n) =>
+        n.id === node.id ? { ...n, position: nextPos } : n
+      ) as BoardNode[];
+      const ops: Parameters<typeof ctx.board.apply>[0]['ops'] = [
         {
-          id: container.id,
-          position: container.position,
-          size: container.size,
-          layout: container.layout
-        },
-        siblings as BoardNode[],
-        { mode: container.layout?.mode === 'free' ? 'column' : container.layout?.mode ?? 'column' }
-      );
-      ctx.board.apply({
-        origin: ctx.agent.id,
-        ops: [
-          {
-            op: 'updateNode',
-            id: node.id,
-            patch: {
-              parentId: containerId,
-              layout: { ...(node.layout ?? { mode: 'free' }), slot: args.slot ? String(args.slot) : undefined }
+          op: 'updateNode',
+          id: node.id,
+          patch: {
+            parentId: containerId,
+            layout: {
+              ...(node.layout ?? { mode: 'free' }),
+              slot: args.slot ? String(args.slot) : undefined
             }
-          },
-          ...(moves.length ? [{ op: 'moveNodes' as const, moves }] : []),
-          { op: 'resizeNode', id: container.id, size: containerSize }
-        ]
-      });
+          }
+        },
+        { op: 'moveNodes', moves: [{ id: node.id, position: nextPos }] }
+      ];
+      if (container.type === 'group') {
+        const wrapped = wrapBounds(working);
+        if (wrapped) {
+          ops.push({
+            op: 'moveNodes',
+            moves: [{ id: container.id, position: wrapped.position }]
+          });
+          ops.push({ op: 'resizeNode', id: container.id, size: wrapped.size });
+        }
+      } else {
+        const childRight = nextPos.x + node.size.w + 24;
+        const childBottom = nextPos.y + node.size.h + 24;
+        const needW = Math.max(container.size.w, childRight - container.position.x);
+        const needH = Math.max(container.size.h, childBottom - container.position.y);
+        if (needW !== container.size.w || needH !== container.size.h) {
+          ops.push({
+            op: 'resizeNode',
+            id: container.id,
+            size: { w: needW, h: needH }
+          });
+        }
+      }
+      ctx.board.apply({ origin: ctx.agent.id, ops });
+      ensureFrameCovers(ctx, [node.id]);
       return { content: `Узел ${node.id} внутри ${containerId}.`, nodeId: node.id };
     }
 
@@ -771,11 +1008,29 @@ defineTool({
     if (!anchorId) return { content: 'нужен relativeTo', isError: true };
     const anchor = ctx.board.getNode(anchorId);
     if (!anchor) return { content: `опора не найдена: ${anchorId}`, isError: true };
-    const pos = relativePosition(anchor, relation, node.size);
+    const placeGap = typeof args.gap === 'number' ? args.gap : 24;
+    const pos = relativePosition(anchor, relation, node.size, placeGap);
+
+    const placed = { id: node.id, position: pos, size: node.size };
+    const overlaps = findOverlaps(
+      placed,
+      collisionCandidates(ctx.board.nodes, new Set([node.id, anchorId]))
+    );
+    if (overlaps.length > 0) {
+      const detail = formatSpatialWarning({ overlaps });
+      const blocked = spatialRiskForAgent(
+        detail,
+        args.acceptSpatialRisk === true,
+        'другое relation/gap или board_arrange'
+      );
+      if (blocked) return blocked;
+    }
+
     ctx.board.apply({
       origin: ctx.agent.id,
       ops: [{ op: 'moveNodes', moves: [{ id: node.id, position: pos }] }]
     });
+    ensureFrameCovers(ctx, [node.id]);
     return {
       content: `Узел ${node.id} размещён ${relation} относительно ${anchorId}.`,
       nodeId: node.id
@@ -787,7 +1042,10 @@ defineTool({
   name: 'board_group',
   toolset: 'board',
   readOnly: false,
-  description: 'Сгруппировать узлы в цветную группу (accent). Выставляет parentId и раскладывает column.',
+  description: [
+    'Сгруппировать узлы в цветную подложку (accent). По умолчанию НЕ двигает узлы — только parentId и размер по их bbox.',
+    'layout=keep (по умолчанию) | column | row | grid | stack | flow — явная перекладка только если нужно.'
+  ].join(' '),
   parameters: objectSchema(
     {
       label: str('Название группы'),
@@ -796,40 +1054,74 @@ defineTool({
         type: 'array',
         items: { type: 'string' },
         description: 'Id узлов для группировки'
-      }
+      },
+      layout: str('keep — сохранить позиции (по умолчанию); иначе режим упаковки', {
+        enum: ['keep', 'column', 'row', 'grid', 'stack', 'flow']
+      })
     },
     ['label', 'nodeIds']
   ),
   async handler(args, ctx): Promise<ToolResult> {
-    const { createGroupNode, boundsOf } = await import('@zmtki/board-schema');
-    const { layoutChildren } = await import('../board/SpatialLayoutEngine.js');
+    const { createGroupNode } = await import('@zmtki/board-schema');
+    const { layoutChildren, wrapBounds } = await import('../board/SpatialLayoutEngine.js');
     const ids = (args.nodeIds as string[]) ?? [];
     const members = ids
       .map((id) => ctx.board.getNode(id))
       .filter((n): n is BoardNode => Boolean(n));
     if (members.length === 0) return { content: 'нет узлов для группы', isError: true };
-    const bounds = boundsOf(members) ?? {
-      x: members[0]!.position.x,
-      y: members[0]!.position.y,
-      w: 400,
-      h: 300
+    const layoutArg = String(args.layout ?? 'keep');
+    const wrapped = wrapBounds(members) ?? {
+      position: { x: members[0]!.position.x - 16, y: members[0]!.position.y - 40 },
+      size: { w: 400, h: 300 }
     };
     const group = createGroupNode({
       label: String(args.label),
       accent: String(args.accent ?? '#6ea8fe'),
-      position: { x: bounds.x - 16, y: bounds.y - 40 },
-      size: { w: bounds.w + 32, h: bounds.h + 56 },
+      position: wrapped.position,
+      size: wrapped.size,
       createdBy: ctx.agent.id
     });
-    const { moves, containerSize } = layoutChildren(
+
+    if (layoutArg === 'keep') {
+      ctx.board.apply({
+        origin: ctx.agent.id,
+        ops: [
+          { op: 'addNode', node: group },
+          ...members.map((m) => ({
+            op: 'updateNode' as const,
+            id: m.id,
+            patch: { parentId: group.id }
+          }))
+        ]
+      });
+      return {
+        content: `Группа «${group.label}» ${group.id} из ${members.length} узлов (позиции сохранены).`,
+        nodeId: group.id
+      };
+    }
+
+    const packMode = layoutArg as 'column' | 'row' | 'grid' | 'stack' | 'flow';
+    const { moves, containerSize, containerPosition } = layoutChildren(
       { id: group.id, position: group.position, size: group.size, layout: group.layout },
       members.map((m) => ({ ...m, parentId: group.id })),
-      { mode: 'column', gap: 16 }
+      { mode: packMode, gap: 16 }
     );
+    const finalPos = containerPosition ?? group.position;
     ctx.board.apply({
       origin: ctx.agent.id,
       ops: [
-        { op: 'addNode', node: { ...group, size: containerSize } },
+        {
+          op: 'addNode',
+          node: {
+            ...group,
+            position: finalPos,
+            size: containerSize,
+            layout: {
+              mode: packMode === 'flow' ? 'column' : packMode,
+              gap: 16
+            }
+          }
+        },
         ...members.map((m) => ({
           op: 'updateNode' as const,
           id: m.id,
@@ -838,7 +1130,10 @@ defineTool({
         ...(moves.length ? [{ op: 'moveNodes' as const, moves }] : [])
       ]
     });
-    return { content: `Группа «${group.label}» ${group.id} из ${members.length} узлов.`, nodeId: group.id };
+    return {
+      content: `Группа «${group.label}» ${group.id} из ${members.length} узлов (${packMode}).`,
+      nodeId: group.id
+    };
   }
 });
 
@@ -868,8 +1163,11 @@ defineTool({
   name: 'board_set_state',
   toolset: 'board',
   readOnly: false,
-  description:
-    'Переключить visualState узла: expanded | widget | icon | ghost (архив). При сворачивании размер сохраняется в meta.expandedSize.',
+  description: [
+    'Переключить visualState узла: expanded | widget | icon | ghost.',
+    'Чтобы убрать узел с доски — по умолчанию board_delete.',
+    'ghost (архив) только если пользователь явно просит сохранить «в архиве», иначе удаляй.'
+  ].join(' '),
   parameters: objectSchema(
     {
       nodeId: str('Id узла'),
@@ -882,6 +1180,21 @@ defineTool({
     const node = ctx.board.getNode(nodeId);
     if (!node) return { content: `узел не найден: ${nodeId}`, isError: true };
     const visualState = String(args.visualState) as 'expanded' | 'widget' | 'icon' | 'ghost';
+    if (visualState === 'ghost') {
+      const approved = await ctx.requestApproval({
+        kind: 'write',
+        title: 'Архивировать узел (ghost)?',
+        detail:
+          'По умолчанию ненужные узлы удаляй через board_delete. Архив — только по явной просьбе сохранить.',
+        subject: `ghost:${nodeId}`
+      });
+      if (!approved) {
+        return {
+          content: 'Архивирование отклонено. Чтобы убрать узел — вызови board_delete.',
+          isError: true
+        };
+      }
+    }
     const patch: Record<string, unknown> = { visualState };
     const meta = { ...(node.meta ?? {}) };
     if (visualState !== 'expanded' && node.visualState === 'expanded') {
@@ -928,6 +1241,239 @@ defineTool({
     if (args.hold === false) lock = clearHeldBy({ ...node, lock });
     ctx.board.apply({ origin: ctx.agent.id, ops: [{ op: 'updateNode', id: nodeId, patch: { lock } }] });
     return { content: `lock обновлён для ${nodeId}` };
+  }
+});
+
+defineTool({
+  name: 'board_app_list_sources',
+  toolset: 'board',
+  readOnly: true,
+  description:
+    'Список окон и экранов ОС для трансляции (appView mode=mirror). Вернёт id/name/kind — потом board_app_embed.',
+  parameters: objectSchema({}),
+  async handler(_args, ctx): Promise<ToolResult> {
+    if (!ctx.services.appView) {
+      return { content: 'appView host недоступен', isError: true };
+    }
+    const sources = await ctx.services.appView.listSources();
+    if (sources.length === 0) return { content: 'Источники не найдены (права экрана / нет окон).' };
+    const lines = sources.slice(0, 40).map((s, i) => `${i + 1}. [${s.kind}] ${s.name} — ${s.id}`);
+    return {
+      content: `Доступно ${sources.length} источников (показаны до 40):\n${lines.join('\n')}`
+    };
+  }
+});
+
+defineTool({
+  name: 'board_app_embed',
+  toolset: 'board',
+  readOnly: false,
+  description: [
+    'Встроить или транслировать приложение на доску (kind=appView).',
+    'mode=web — интерактивное веб-окно поверх узла (localhost/сайт).',
+    'mode=headless — скрытый браузер + видеопоток кадров на узел (агентский браузер без оверлея).',
+    'mode=mirror — трансляция реального окна/экрана ОС (сначала board_app_list_sources).',
+    'Если передан nodeId — перенастроить существующий appView; иначе создать новый.'
+  ].join(' '),
+  parameters: objectSchema(
+    {
+      mode: str('Режим', { enum: ['web', 'headless', 'mirror'] }),
+      title: str('Заголовок артефакта'),
+      url: str('URL для web/headless'),
+      sourceId: str('Id источника из board_app_list_sources (mirror)'),
+      sourceName: str('Имя окна/экрана (mirror)'),
+      fps: num('Кадры/сек для headless/mirror (1–30, по умолчанию 8)'),
+      live: str('web: true=оверлей, false=только кадры', { enum: ['true', 'false'] }),
+      nodeId: str('Существующий appView для обновления')
+    },
+    ['mode']
+  ),
+  async handler(args, ctx): Promise<ToolResult> {
+    if (!ctx.services.appView) {
+      return { content: 'appView host недоступен (нужен desktop)', isError: true };
+    }
+    const mode = String(args.mode) as 'web' | 'headless' | 'mirror';
+    const url = String(args.url ?? (mode === 'mirror' ? '' : 'about:blank'));
+    const sourceId = String(args.sourceId ?? '');
+    const sourceName = String(args.sourceName ?? '');
+    const fps = typeof args.fps === 'number' ? Math.max(1, Math.min(30, args.fps)) : 8;
+    const live = args.live === 'false' ? false : true;
+
+    if (mode === 'mirror' && !sourceId) {
+      return {
+        content: 'для mirror нужен sourceId — вызови board_app_list_sources',
+        isError: true
+      };
+    }
+    if ((mode === 'web' || mode === 'headless') && !url) {
+      return { content: 'для web/headless нужен url', isError: true };
+    }
+
+    const frame = agentFrameOf(ctx);
+    let nodeId = args.nodeId ? String(args.nodeId) : null;
+    const title =
+      String(args.title ?? '') ||
+      (mode === 'mirror' ? sourceName || 'Окно' : url) ||
+      'App';
+
+    if (!nodeId) {
+      const size = DEFAULT_ARTIFACT_SIZE.appView;
+      const position = ctx.board.placeForAgent(ctx.agent.id, size);
+      const parsed = ArtifactSpecSchema.safeParse({
+        kind: 'appView',
+        title,
+        tone: 'running',
+        mode,
+        url,
+        sourceId,
+        sourceName,
+        fps,
+        live,
+        running: true
+      });
+      if (!parsed.success) {
+        return { content: `spec: ${parsed.error.message}`, isError: true };
+      }
+      const node = createArtifactNode({
+        artifact: parsed.data,
+        position,
+        size,
+        createdBy: ctx.agent.id,
+        parentId: frame?.id ?? null
+      });
+      ctx.board.apply({ origin: ctx.agent.id, ops: [{ op: 'addNode', node }] });
+      nodeId = node.id;
+    } else {
+      const node = ctx.board.getNode(nodeId);
+      if (!node || !isArtifactNode(node) || node.artifact.kind !== 'appView') {
+        return { content: 'nodeId должен быть appView', isError: true };
+      }
+      ctx.board.apply({
+        origin: ctx.agent.id,
+        ops: [
+          {
+            op: 'updateNode',
+            id: nodeId,
+            patch: {
+              artifact: {
+                ...node.artifact,
+                title,
+                tone: 'running',
+                mode,
+                url,
+                sourceId,
+                sourceName,
+                fps,
+                live,
+                running: true,
+                error: ''
+              }
+            }
+          }
+        ]
+      });
+    }
+
+    try {
+      await ctx.services.appView.open({
+        nodeId,
+        mode,
+        url,
+        sourceId,
+        sourceName,
+        fps,
+        live
+      });
+    } catch (err) {
+      return {
+        content: `host error: ${err instanceof Error ? err.message : String(err)}`,
+        nodeId,
+        isError: true
+      };
+    }
+
+    return {
+      content: `appView ${nodeId} (${mode}${mode === 'mirror' ? `: ${sourceName || sourceId}` : `: ${url}`}).`,
+      nodeId
+    };
+  }
+});
+
+defineTool({
+  name: 'board_app_navigate',
+  toolset: 'board',
+  readOnly: false,
+  description: 'Перейти по URL в appView / browser (web или headless).',
+  parameters: objectSchema(
+    {
+      nodeId: str('Id узла appView или browser'),
+      url: str('Новый URL')
+    },
+    ['nodeId', 'url']
+  ),
+  async handler(args, ctx): Promise<ToolResult> {
+    if (!ctx.services.appView) {
+      return { content: 'appView host недоступен', isError: true };
+    }
+    const nodeId = String(args.nodeId);
+    const url = String(args.url);
+    const node = ctx.board.getNode(nodeId);
+    if (!node || !isArtifactNode(node)) {
+      return { content: 'узел не найден', isError: true };
+    }
+    if (node.artifact.kind === 'appView') {
+      ctx.board.apply({
+        origin: ctx.agent.id,
+        ops: [
+          {
+            op: 'updateNode',
+            id: nodeId,
+            patch: { artifact: { ...node.artifact, url, error: '' } }
+          }
+        ]
+      });
+    } else if (node.artifact.kind === 'browser' || node.artifact.kind === 'demo') {
+      ctx.board.apply({
+        origin: ctx.agent.id,
+        ops: [
+          {
+            op: 'updateNode',
+            id: nodeId,
+            patch: { artifact: { ...node.artifact, url } }
+          }
+        ]
+      });
+    } else {
+      return { content: 'нужен appView, browser или demo', isError: true };
+    }
+    await ctx.services.appView.navigate(nodeId, url);
+    return { content: `Навигация ${nodeId} → ${url}`, nodeId };
+  }
+});
+
+defineTool({
+  name: 'board_app_close',
+  toolset: 'board',
+  readOnly: false,
+  description: 'Остановить сессию appView (освободить WebContents / захват) и пометить running=false.',
+  parameters: objectSchema({ nodeId: str('Id appView') }, ['nodeId']),
+  async handler(args, ctx): Promise<ToolResult> {
+    const nodeId = String(args.nodeId);
+    await ctx.services.appView?.stop(nodeId);
+    const node = ctx.board.getNode(nodeId);
+    if (node && isArtifactNode(node) && node.artifact.kind === 'appView') {
+      ctx.board.apply({
+        origin: ctx.agent.id,
+        ops: [
+          {
+            op: 'updateNode',
+            id: nodeId,
+            patch: { artifact: { ...node.artifact, running: false, tone: 'idle' } }
+          }
+        ]
+      });
+    }
+    return { content: `Сессия ${nodeId} остановлена.`, nodeId };
   }
 });
 

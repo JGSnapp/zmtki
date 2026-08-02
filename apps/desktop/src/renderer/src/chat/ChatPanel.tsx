@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Room, RoomMessage, TurnPolicy } from '@zmtki/protocol';
+import { renderMarkdown } from '../markdown.js';
 import { pickQuickStickers, stickerImgSrc, type QuickSticker } from '../stickers/quickStickers.js';
+import type { ToolCallView } from '@zmtki/protocol';
 import { submit, useStore } from '../store.js';
 import { NewRoomDialog } from './NewRoomDialog.js';
 
@@ -51,10 +53,85 @@ function RoomRow({ room, active }: { room: Room; active: boolean }): JSX.Element
   );
 }
 
+function TurnTrace({
+  reasoning,
+  calls,
+  defaultOpen = false,
+  live = false
+}: {
+  reasoning: string;
+  calls: ToolCallView[];
+  defaultOpen?: boolean;
+  live?: boolean;
+}): JSX.Element | null {
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [showTools, setShowTools] = useState(defaultOpen || live);
+  if (!reasoning && calls.length === 0) return null;
+
+  const running = calls.some((c) => c.status === 'running');
+
+  return (
+    <div className={`turn-trace ${live ? 'live' : 'archived'}`}>
+      {calls.length > 0 && (
+        <div className="turn-trace-block">
+          <button
+            type="button"
+            className="turn-trace-toggle"
+            onClick={() => setShowTools((v) => !v)}
+          >
+            <span className={`turn-trace-chevron ${showTools ? 'open' : ''}`} />
+            Инструменты ({calls.length})
+            {running && <span className="turn-trace-live-tag">сейчас</span>}
+          </button>
+          {showTools && (
+            <div className="live-steps">
+              {calls.map((call, i) => (
+                <div
+                  key={call.id}
+                  className={`live-step ${call.status} ${i === calls.length - 1 ? 'latest' : ''}`}
+                >
+                  <span className="live-step-mark" />
+                  <div className="live-step-body">
+                    <span className="live-step-name">{friendlyToolLabel(call.name)}</span>
+                    {call.resultPreview && (
+                      <span className="live-step-preview">{shortPreview(call.resultPreview)}</span>
+                    )}
+                    {typeof call.durationMs === 'number' && call.status !== 'running' && (
+                      <span className="live-step-dur">{Math.round(call.durationMs)}ms</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {reasoning && (
+        <div className="turn-trace-block">
+          <button
+            type="button"
+            className="turn-trace-toggle"
+            onClick={() => setShowReasoning((v) => !v)}
+          >
+            <span className={`turn-trace-chevron ${showReasoning ? 'open' : ''}`} />
+            Рассуждения
+          </button>
+          {showReasoning && (
+            <pre className="turn-trace-reasoning">{reasoning.slice(-12000)}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MessageBubble({ message }: { message: RoomMessage }): JSX.Element {
   const agents = useStore((s) => s.agents);
   const setActiveBoard = useStore((s) => s.setActiveBoard);
   const boards = useStore((s) => s.boards);
+  const archived = useStore((s) =>
+    message.turnId ? s.archivedTurns.get(message.turnId) : undefined
+  );
   const agent = agents.find((a) => a.id === message.author.id);
   const mine = message.author.kind === 'human';
 
@@ -71,6 +148,9 @@ function MessageBubble({ message }: { message: RoomMessage }): JSX.Element {
       )}
       <div className="msg-body">
         {!mine && <div className="msg-author">{message.author.name}</div>}
+        {!mine && archived && (
+          <TurnTrace reasoning={archived.reasoning} calls={archived.calls} defaultOpen={false} />
+        )}
         {message.sticker && (
           <img
             className="msg-sticker"
@@ -79,7 +159,9 @@ function MessageBubble({ message }: { message: RoomMessage }): JSX.Element {
           />
         )}
         {message.body && !(message.sticker && message.body.startsWith('стикер')) && (
-          <div className="msg-text">{message.body}</div>
+          <div className={`msg-text ${mine ? '' : 'msg-md'}`.trim()}>
+            {mine ? message.body : renderMarkdown(message.body)}
+          </div>
         )}
         {message.attachments?.length > 0 && (
           <div className="msg-attachments">
@@ -134,42 +216,98 @@ function MessageBubble({ message }: { message: RoomMessage }): JSX.Element {
 function LiveTurnView({ agentId }: { agentId: string }): JSX.Element | null {
   const turn = useStore((s) => s.liveTurns.get(agentId));
   const agent = useStore((s) => s.agents.find((a) => a.id === agentId));
-  const [showReasoning, setShowReasoning] = useState(false);
-  if (!turn) return null;
+  if (!turn || !agent) return null;
+
+  const activeCall = [...turn.calls].reverse().find((c) => c.status === 'running') ?? turn.calls.at(-1);
+  const phase =
+    agent.status === 'thinking'
+      ? 'Думает'
+      : agent.status === 'waitingApproval'
+        ? 'Ждёт подтверждения'
+        : agent.status === 'waitingInput'
+          ? 'Ждёт ввода'
+          : activeCall
+            ? 'Работает'
+            : 'Пишет ответ';
 
   return (
-    <div className="live-turn">
+    <div className="live-turn" style={{ ['--live-accent' as string]: agent.avatarColor }}>
       <div className="live-head">
-        <span className="msg-avatar" style={{ background: agent?.avatarColor ?? '#4a5268' }}>
-          {(agent?.name ?? '?').slice(0, 1).toUpperCase()}
+        <span className="live-avatar" style={{ background: agent.avatarColor }}>
+          {agent.name.slice(0, 1).toUpperCase()}
         </span>
-        <span>{agent?.name}</span>
-        <span className="live-dot" />
-        <button className="link-btn" onClick={() => void submit({ type: 'agent.interrupt', agentId })}>
+        <div className="live-meta">
+          <div className="live-name-row">
+            <span className="live-name">{agent.name}</span>
+            <span className="live-phase">
+              <span className="live-dot" />
+              {phase}
+            </span>
+          </div>
+          {activeCall && (
+            <div className="live-now" title={activeCall.resultPreview || activeCall.name}>
+              {friendlyToolLabel(activeCall.name)}
+              {activeCall.resultPreview ? (
+                <span className="live-now-detail"> · {shortPreview(activeCall.resultPreview)}</span>
+              ) : null}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="live-stop"
+          onClick={() => void submit({ type: 'agent.interrupt', agentId })}
+        >
           Прервать
         </button>
       </div>
-      {turn.calls.length > 0 && (
-        <ul className="live-calls">
-          {turn.calls.slice(-6).map((call) => (
-            <li key={call.id} className={`call ${call.status}`}>
-              <span className="call-name">{call.name}</span>
-              {call.resultPreview && <span className="call-preview">{call.resultPreview.slice(0, 90)}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-      {turn.reasoning && (
-        <div className="live-reasoning">
-          <button className="link-btn" onClick={() => setShowReasoning((v) => !v)}>
-            {showReasoning ? 'Скрыть рассуждения' : 'Показать рассуждения'}
-          </button>
-          {showReasoning && <pre>{turn.reasoning.slice(-2000)}</pre>}
+
+      <TurnTrace reasoning={turn.reasoning} calls={turn.calls} live />
+
+      {turn.text && (
+        <div className="live-text">
+          {turn.text}
+          <span className="live-caret" />
         </div>
       )}
-      {turn.text && <div className="live-text">{turn.text}</div>}
     </div>
   );
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  board_read: 'Читает доску',
+  board_screenshot: 'Снимает доску',
+  board_move_frame: 'Двигает рамку',
+  board_arrange: 'Раскладывает',
+  board_create_mark: 'Ставит метку',
+  board_set_state: 'Меняет состояние',
+  sticker_place: 'Ставит стикер',
+  stickers_list: 'Смотрит стикеры',
+  room_send: 'Пишет в чат',
+  room_read: 'Читает чат',
+  room_list: 'Смотрит комнаты',
+  list_files: 'Смотрит файлы',
+  read_file: 'Читает файл',
+  write_file: 'Пишет файл',
+  search_files: 'Ищет в файлах',
+  shell: 'Команда в терминале',
+  web_search: 'Ищет в интернете',
+  web_fetch: 'Открывает страницу',
+  apply_patch: 'Патчит код',
+  delegate_task: 'Делегирует',
+  memory_write: 'Пишет в память',
+  memory_read: 'Читает память'
+};
+
+function friendlyToolLabel(name: string): string {
+  if (TOOL_LABELS[name]) return TOOL_LABELS[name];
+  if (name.startsWith('mcp_') || name.includes('__')) return `Инструмент · ${name.replace(/^mcp_/, '')}`;
+  return name.replace(/_/g, ' ');
+}
+
+function shortPreview(text: string): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length > 72 ? `${clean.slice(0, 72)}…` : clean;
 }
 
 function ChatStickerPicker({
@@ -388,24 +526,38 @@ export function ChatPanel(): JSX.Element {
                 {roomAgents.length} участник{roomAgents.length === 1 ? '' : 'а'} · {POLICY_LABEL[room.turnPolicy]}
               </div>
             </div>
-            <select
-              className="policy-select"
-              title="Кто отвечает"
-              value={room.turnPolicy}
-              onChange={(e) =>
-                void submit({
-                  type: 'room.update',
-                  roomId: room.id,
-                  patch: { turnPolicy: e.target.value as TurnPolicy }
-                })
-              }
-            >
-              {(Object.keys(POLICY_LABEL) as TurnPolicy[]).map((policy) => (
-                <option key={policy} value={policy}>
-                  {POLICY_LABEL[policy]}
-                </option>
-              ))}
-            </select>
+            <div className="chat-head-actions">
+              <button
+                type="button"
+                className="icon-btn"
+                title="Очистить чат"
+                disabled={messages.length === 0}
+                onClick={() => {
+                  if (!window.confirm('Очистить историю этого чата?')) return;
+                  void submit({ type: 'room.clear', roomId: room.id });
+                }}
+              >
+                ⌫
+              </button>
+              <select
+                className="policy-select"
+                title="Кто отвечает"
+                value={room.turnPolicy}
+                onChange={(e) =>
+                  void submit({
+                    type: 'room.update',
+                    roomId: room.id,
+                    patch: { turnPolicy: e.target.value as TurnPolicy }
+                  })
+                }
+              >
+                {(Object.keys(POLICY_LABEL) as TurnPolicy[]).map((policy) => (
+                  <option key={policy} value={policy}>
+                    {POLICY_LABEL[policy]}
+                  </option>
+                ))}
+              </select>
+            </div>
           </header>
         )}
 
@@ -558,28 +710,28 @@ export function ChatPanel(): JSX.Element {
                 ⋯
               </button>
             </div>
-
-            {primaryAgent && (
-              <select
-                className="compose-model"
-                title="Модель агента"
-                value={primaryAgent.model.model || ''}
-                disabled={modelOptions.length === 0}
-                onChange={(e) => void changeModel(e.target.value)}
-              >
-                {modelOptions.length === 0 && (
-                  <option value={primaryAgent.model.model || ''}>
-                    {primaryAgent.model.model || 'модель не выбрана'}
-                  </option>
-                )}
-                {modelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            )}
           </div>
+
+          {primaryAgent && (
+            <select
+              className="compose-model"
+              title="Сильная модель агента"
+              value={primaryAgent.model.model || ''}
+              disabled={modelOptions.length === 0}
+              onChange={(e) => void changeModel(e.target.value)}
+            >
+              {modelOptions.length === 0 && (
+                <option value={primaryAgent.model.model || ''}>
+                  {primaryAgent.model.model || 'модель не выбрана'}
+                </option>
+              )}
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          )}
 
           <div className="compose-row">
             <textarea

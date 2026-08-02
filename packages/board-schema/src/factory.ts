@@ -5,6 +5,7 @@ import {
   type ArtifactSpec
 } from './artifacts.js';
 import { DEFAULT_LAYER_ID } from './board.js';
+import { sideToAnchor, type EdgeSide } from './edgeSides.js';
 import type { Vec2 } from './geometry.js';
 import { newId } from './ids.js';
 import {
@@ -149,7 +150,9 @@ export function createGroupNode(input: CreateGroupInput): GroupNode {
     hidden: false,
     parentId: null,
     visualState: 'expanded',
-    layout: { mode: 'column', gap: 16 },
+    // Groups are visual wrappers: keep free layout so creating a group never
+    // restacks members into a column/row. Call board_arrange explicitly to pack.
+    layout: { mode: 'free', gap: 16 },
     owner: createdBy ? { kind: 'agent', id: createdBy } : { kind: 'human', id: 'human' },
     lock: {
       delete: !createdBy,
@@ -340,12 +343,27 @@ export function createStickyNode(input: CreateStickyInput): StickyNode {
 export function createEdge(
   from: string,
   to: string,
-  opts: { label?: string; layerId?: string; createdBy?: string | null } = {}
+  opts: {
+    label?: string;
+    layerId?: string;
+    createdBy?: string | null;
+    /** Fixed attach side; omit / null = auto nearest at render time. */
+    fromSide?: EdgeSide | null;
+    toSide?: EdgeSide | null;
+  } = {}
 ): BoardEdge {
   return BoardEdgeSchema.parse({
     id: newId('edge'),
-    from: { nodeId: from, point: null, anchor: null },
-    to: { nodeId: to, point: null, anchor: null },
+    from: {
+      nodeId: from,
+      point: null,
+      anchor: opts.fromSide ? sideToAnchor(opts.fromSide) : null
+    },
+    to: {
+      nodeId: to,
+      point: null,
+      anchor: opts.toSide ? sideToAnchor(opts.toSide) : null
+    },
     label: opts.label ?? '',
     style: DEFAULT_STYLE,
     startArrow: 'none',
@@ -369,7 +387,8 @@ export function findFreeSlot(
   gap = 24
 ): Vec2 {
   const startX = frame.position.x + gap;
-  const startY = frame.position.y + gap + 32;
+  // Leave room for the floating agent name badge on the top edge of the frame.
+  const startY = frame.position.y + gap + 48;
   const maxX = frame.position.x + frame.size.w - gap;
 
   let x = startX;

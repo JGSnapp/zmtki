@@ -45,6 +45,19 @@ export interface LiveTurn {
   calls: ToolCallView[];
 }
 
+/** Finished turn trace kept in the chat UI (collapsed under the message). */
+export interface ArchivedTurn {
+  agentId: string;
+  turnId: string;
+  text: string;
+  reasoning: string;
+  calls: ToolCallView[];
+  status: 'completed' | 'failed' | 'aborted';
+  finishedAt: number;
+}
+
+const MAX_ARCHIVED_TURNS = 120;
+
 export interface BoardState {
   doc: BoardDoc;
   nodes: Map<string, BoardNode>;
@@ -75,6 +88,8 @@ interface AppState {
   chatgptError: string;
 
   liveTurns: Map<string, LiveTurn>;
+  /** Keyed by turnId — reasoning/tool calls survive after the live strip goes away. */
+  archivedTurns: Map<string, ArchivedTurn>;
   terminalBuffers: Map<string, string>;
 
   tool: ToolName;
@@ -92,6 +107,8 @@ interface AppState {
   activityOpen: boolean;
   /** Mirrors the app setting so the toggle renders without a round trip. */
   focusMode: boolean;
+  /** True while a modal/dialog owns the keyboard (create agent, etc.). */
+  overlayOpen: boolean;
 }
 
 interface AppActions {
@@ -111,6 +128,7 @@ interface AppActions {
   toggleSettings(open?: boolean): void;
   toggleNotifications(open?: boolean): void;
   toggleActivity(open?: boolean): void;
+  setOverlayOpen(open: boolean): void;
   activeBoard(): BoardState | undefined;
   agentById(agentId: string): Agent | undefined;
 }
@@ -156,6 +174,12 @@ function applyOps(state: BoardState, ops: readonly BoardOp[]): BoardState {
       }
       case 'removeNode':
         nodes.delete(op.id);
+        // Mirror BoardStore: drop arrows that pointed at the deleted node.
+        for (const [edgeId, edge] of [...edges]) {
+          if (edge.from.nodeId === op.id || edge.to.nodeId === op.id) {
+            edges.delete(edgeId);
+          }
+        }
         break;
       case 'moveNodes':
         for (const move of op.moves) {
@@ -165,7 +189,13 @@ function applyOps(state: BoardState, ops: readonly BoardOp[]): BoardState {
         break;
       case 'resizeNode': {
         const node = nodes.get(op.id);
-        if (node) nodes.set(op.id, { ...node, size: op.size });
+        if (node) {
+          nodes.set(op.id, {
+            ...node,
+            size: op.size,
+            ...(op.position ? { position: op.position } : {})
+          });
+        }
         break;
       }
       case 'addEdge':
@@ -211,6 +241,7 @@ export const useStore = create<Store>((set, get) => ({
   chatgptError: '',
 
   liveTurns: new Map(),
+  archivedTurns: new Map(),
   terminalBuffers: new Map(),
 
   tool: 'select',
@@ -226,6 +257,7 @@ export const useStore = create<Store>((set, get) => ({
   notificationsOpen: false,
   activityOpen: false,
   focusMode: false,
+  overlayOpen: false,
 
   activeBoard: () => {
     const { boards, activeBoardId } = get();
@@ -266,8 +298,14 @@ export const useStore = create<Store>((set, get) => ({
           boards.delete(msg.boardId);
           return {
             boards,
+            agents: state.agents.filter((a) => a.homeBoardId !== msg.boardId),
             activeBoardId:
-              state.activeBoardId === msg.boardId ? ([...boards.keys()][0] ?? null) : state.activeBoardId
+              state.activeBoardId === msg.boardId ? ([...boards.keys()][0] ?? null) : state.activeBoardId,
+            followAgentId:
+              state.followAgentId &&
+              state.agents.some((a) => a.id === state.followAgentId && a.homeBoardId === msg.boardId)
+                ? null
+                : state.followAgentId
           };
         }
 
@@ -321,12 +359,47 @@ export const useStore = create<Store>((set, get) => ({
         case 'turn.failed':
         case 'turn.aborted': {
           const liveTurns = new Map(state.liveTurns);
+          const live = liveTurns.get(msg.agentId);
           liveTurns.delete(msg.agentId);
-          return { liveTurns };
+          if (!live || (!live.reasoning && live.calls.length === 0 && !live.text)) {
+            return { liveTurns };
+          }
+          const archivedTurns = new Map(state.archivedTurns);
+          archivedTurns.set(live.turnId, {
+            agentId: live.agentId,
+            turnId: live.turnId,
+            text: live.text,
+            reasoning: live.reasoning,
+            calls: live.calls,
+            status:
+              msg.type === 'turn.completed'
+                ? 'completed'
+                : msg.type === 'turn.failed'
+                  ? 'failed'
+                  : 'aborted',
+            finishedAt: Date.now()
+          });
+          if (archivedTurns.size > MAX_ARCHIVED_TURNS) {
+            const oldest = [...archivedTurns.entries()].sort(
+              (a, b) => a[1].finishedAt - b[1].finishedAt
+            );
+            const drop = oldest.length - MAX_ARCHIVED_TURNS;
+            for (let i = 0; i < drop; i += 1) {
+              const key = oldest[i]?.[0];
+              if (key) archivedTurns.delete(key);
+            }
+          }
+          return { liveTurns, archivedTurns };
         }
 
-        case 'room.list':
-          return { rooms: msg.rooms, activeRoomId: state.activeRoomId ?? (msg.rooms[0]?.id ?? null) };
+        case 'room.list': {
+          const stillThere =
+            state.activeRoomId != null && msg.rooms.some((r) => r.id === state.activeRoomId);
+          return {
+            rooms: msg.rooms,
+            activeRoomId: stillThere ? state.activeRoomId : (msg.rooms[0]?.id ?? null)
+          };
+        }
 
         case 'room.updated':
           return {
@@ -341,6 +414,17 @@ export const useStore = create<Store>((set, get) => ({
           if (list.some((m) => m.id === msg.message.id)) return {};
           messages.set(msg.message.roomId, [...list, msg.message]);
           return { messages };
+        }
+
+        case 'room.cleared': {
+          const messages = new Map(state.messages);
+          const clearedIds = (state.messages.get(msg.roomId) ?? [])
+            .map((m) => m.turnId)
+            .filter((id): id is string => Boolean(id));
+          messages.set(msg.roomId, []);
+          const archivedTurns = new Map(state.archivedTurns);
+          for (const turnId of clearedIds) archivedTurns.delete(turnId);
+          return { messages, archivedTurns };
         }
 
         case 'comment.threads':
@@ -451,5 +535,6 @@ export const useStore = create<Store>((set, get) => ({
   togglePalette: (open) => set((s) => ({ paletteOpen: open ?? !s.paletteOpen })),
   toggleSettings: (open) => set((s) => ({ settingsOpen: open ?? !s.settingsOpen })),
   toggleNotifications: (open) => set((s) => ({ notificationsOpen: open ?? !s.notificationsOpen })),
-  toggleActivity: (open) => set((s) => ({ activityOpen: open ?? !s.activityOpen }))
+  toggleActivity: (open) => set((s) => ({ activityOpen: open ?? !s.activityOpen })),
+  setOverlayOpen: (open) => set({ overlayOpen: open })
 }));

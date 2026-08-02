@@ -22,7 +22,10 @@ const WORKING_RULES = `# Как работать
 - Если задача неоднозначна, спроси в комнате, а не угадывай.
 - Заканчивай ход коротким финальным текстом (он уйдёт в чат сам): что сделано и где смотреть на доске. Не повторяй этот же текст через room_send.
 - Визуальные элементы доски (фигуры, текст, sticky, стикеры) создавай через board_create_mark — они тоже часть отчёта, не только «артефакты» kind=markdown/status/….
-- Схемы со стрелками: после board_connect вызови board_arrange layout=flow — меньше пересечений и больше воздуха между узлами.`;
+- Раскладка: схемы со стрелками (вики, деревья, DAG) — после связей вызови board_arrange layout=graph (как Mermaid; direction=tb по умолчанию, lr при необходимости). Свободная доска без стрелок — board_place. Линейный пайплайн — layout=flow. Группа (board_group) по умолчанию только подложка. Стороны: fromSide/toSide или auto.
+- После каждого размещения артефактов проверяй эстетику: пересечения, расстояния, выравнивание. При сомнении или после схемы из нескольких узлов — board_screenshot (картинка уйдёт в vision) и поправь раскладку.
+- Приложения на доске: board_app_embed mode=web (интерактивный сайт/localhost), mode=headless (скрытый браузер + поток кадров), mode=mirror (трансляция окна ОС — сначала board_app_list_sources). Навигация: board_app_navigate; стоп: board_app_close.
+- Текст для человека: note / blocks / codePad / markdown — их можно править на доске.`;
 
 export interface PromptTiers {
   /** Identity, protocol, tool guidance. Never changes within a session. */

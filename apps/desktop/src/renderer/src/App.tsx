@@ -82,9 +82,14 @@ export function App(): JSX.Element {
     void submit<Notification[]>({ type: 'notification.list', limit: 100 }).then((result) => {
       if (result.ok) useStore.setState({ notifications: result.value });
     });
-    void submit<{ focusMode: boolean }>({ type: 'settings.get' }).then((result) => {
-      if (result.ok) useStore.setState({ focusMode: result.value.focusMode });
-    });
+    void submit<{ focusMode: boolean; chatFontSize?: number }>({ type: 'settings.get' }).then(
+      (result) => {
+        if (!result.ok) return;
+        useStore.setState({ focusMode: result.value.focusMode });
+        const px = result.value.chatFontSize ?? 13;
+        document.documentElement.style.setProperty('--chat-font-size', `${px}px`);
+      }
+    );
     void submit<ChatGptStatusView>({ type: 'chatgpt.status' }).then((result) => {
       if (result.ok) useStore.setState({ chatgpt: result.value });
     });

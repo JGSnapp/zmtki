@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  AppViewArtifactSpec,
   ChartArtifactSpec,
   ControlsArtifactSpec,
   DemoArtifactSpec,
@@ -10,7 +11,6 @@ import type {
   ImageArtifactSpec,
   KanbanArtifactSpec,
   LinkArtifactSpec,
-  MarkdownArtifactSpec,
   MermaidArtifactSpec,
   PortalArtifactSpec,
   StatusArtifactSpec,
@@ -19,104 +19,15 @@ import type {
   TodoArtifactSpec
 } from './specTypes.js';
 import { registerArtifact, type ArtifactViewProps } from './registry.js';
+import { subscribeAppViewFrame } from './appViewFrames.js';
+import './editors.js';
+import './media.js';
 import { submit, useStore } from '../store.js';
 
 // ------------------------------------------------------------------ primitives
 
 function Empty({ text }: { text: string }): JSX.Element {
   return <div className="art-empty">{text}</div>;
-}
-
-/**
- * Deliberately small Markdown support: headings, lists, code, bold, links.
- * A full parser is a large dependency for text that agents mostly write as
- * short reports, and anything richer belongs in an htmlWidget.
- */
-function renderMarkdown(text: string): JSX.Element[] {
-  const lines = text.split('\n');
-  const out: JSX.Element[] = [];
-  let codeBuffer: string[] | null = null;
-  let listBuffer: string[] | null = null;
-
-  const flushList = (key: number): void => {
-    if (!listBuffer) return;
-    out.push(
-      <ul key={`ul${key}`}>
-        {listBuffer.map((item, i) => (
-          <li key={i} dangerouslySetInnerHTML={{ __html: inlineMd(item) }} />
-        ))}
-      </ul>
-    );
-    listBuffer = null;
-  };
-
-  lines.forEach((line, index) => {
-    if (line.startsWith('```')) {
-      if (codeBuffer) {
-        out.push(
-          <pre key={`code${index}`} className="art-code">
-            <code>{codeBuffer.join('\n')}</code>
-          </pre>
-        );
-        codeBuffer = null;
-      } else {
-        flushList(index);
-        codeBuffer = [];
-      }
-      return;
-    }
-    if (codeBuffer) {
-      codeBuffer.push(line);
-      return;
-    }
-
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-    if (heading) {
-      flushList(index);
-      const level = heading[1]?.length ?? 1;
-      const Tag = `h${Math.min(4, level + 2)}` as 'h3' | 'h4' | 'h5' | 'h6';
-      out.push(<Tag key={index} dangerouslySetInnerHTML={{ __html: inlineMd(heading[2] ?? '') }} />);
-      return;
-    }
-
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (bullet) {
-      listBuffer ??= [];
-      listBuffer.push(bullet[1] ?? '');
-      return;
-    }
-
-    flushList(index);
-    if (line.trim()) {
-      out.push(<p key={index} dangerouslySetInnerHTML={{ __html: inlineMd(line) }} />);
-    }
-  });
-
-  flushList(lines.length);
-  if (codeBuffer) {
-    out.push(
-      <pre key="code-tail" className="art-code">
-        <code>{(codeBuffer as string[]).join('\n')}</code>
-      </pre>
-    );
-  }
-  return out;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function inlineMd(text: string): string {
-  return escapeHtml(text)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 }
 
 /** Strips ANSI so terminal output is readable without a full emulator. */
@@ -126,11 +37,6 @@ function stripAnsi(text: string): string {
 }
 
 // ------------------------------------------------------------------ renderers
-
-registerArtifact<MarkdownArtifactSpec>('markdown', ({ spec, detailed }) => {
-  const body = useMemo(() => (detailed ? renderMarkdown(spec.text) : null), [spec.text, detailed]);
-  return <div className="art-markdown nowheel">{body ?? <Empty text={spec.text.slice(0, 120)} />}</div>;
-});
 
 registerArtifact<StatusArtifactSpec>('status', ({ spec }) => (
   <div className="art-status">
@@ -585,36 +491,52 @@ registerArtifact<ControlsArtifactSpec>('controls', ({ nodeId, spec }) => {
   );
 });
 
-registerArtifact<DemoArtifactSpec>('demo', ({ spec }) => (
-  <div className="art-demo">
-    <div className="art-demo-bar">
-      <span className={`art-dot ${spec.running ? 'on' : 'off'}`} />
-      <span className="art-demo-url">{spec.url}</span>
-      <button className="art-btn" onClick={() => void window.zmtki.openExternal(spec.url)}>
-        Открыть
-      </button>
-    </div>
-    {spec.command && <code className="art-demo-cmd">{spec.command}</code>}
-  </div>
-));
-
-registerArtifact<PortalArtifactSpec>('portal', ({ spec }) => (
-  <div className="art-portal">
-    <div className="art-portal-head">
-      ↗ {spec.remoteBoardName} / {spec.target.nodeId}
-    </div>
-    <pre className="art-portal-body nowheel">{spec.snapshot}</pre>
-  </div>
-));
-
-/**
- * The live browser view is an Electron WebContentsView positioned over the
- * canvas by the main process, so this component only reserves the space and
- * reports where it landed.
- */
-registerArtifact('browser', ({ nodeId, spec, detailed }: ArtifactViewProps) => {
+function AppViewSurface({
+  nodeId,
+  mode,
+  url,
+  sourceId,
+  sourceName,
+  fps,
+  live,
+  detailed,
+  label
+}: {
+  nodeId: string;
+  mode: 'web' | 'headless' | 'mirror';
+  url: string;
+  sourceId: string;
+  sourceName: string;
+  fps: number;
+  live: boolean;
+  detailed: boolean;
+  label?: string;
+}): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
-  const browser = spec as unknown as { url: string; live: boolean };
+  const [frame, setFrame] = useState<string | null>(null);
+  const overlay = mode === 'web' && live && detailed;
+
+  useEffect(() => {
+    void submit({
+      type: 'appView.open',
+      nodeId,
+      mode,
+      url,
+      sourceId,
+      sourceName,
+      fps,
+      live
+    });
+    // Do not stop on unmount — React Flow remounts nodes often; sessions are
+    // torn down via board_app_close / host destroyAll on quit.
+  }, [nodeId, mode, sourceId, fps, live]);
+
+  useEffect(() => {
+    if (mode === 'mirror') return;
+    void submit({ type: 'appView.navigate', nodeId, url });
+  }, [nodeId, mode, url]);
+
+  useEffect(() => subscribeAppViewFrame(nodeId, setFrame), [nodeId]);
 
   useEffect(() => {
     const element = ref.current;
@@ -622,14 +544,13 @@ registerArtifact('browser', ({ nodeId, spec, detailed }: ArtifactViewProps) => {
 
     const report = (): void => {
       const rect = element.getBoundingClientRect();
+      const visible = overlay && rect.width > 80 && rect.height > 80;
       void submit({
-        type: 'browser.setBounds',
+        type: 'appView.setBounds',
         boardId: useStore.getState().activeBoardId ?? '',
         nodeId,
         bounds: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
-        // Below a certain scale the live view is illegible and expensive, so it
-        // is swapped for the poster image.
-        visible: detailed && rect.width > 80 && rect.height > 80
+        visible
       });
     };
 
@@ -644,22 +565,103 @@ registerArtifact('browser', ({ nodeId, spec, detailed }: ArtifactViewProps) => {
       window.removeEventListener('scroll', report, true);
       window.clearInterval(interval);
       void submit({
-        type: 'browser.setBounds',
+        type: 'appView.setBounds',
         boardId: useStore.getState().activeBoardId ?? '',
         nodeId,
         bounds: null,
         visible: false
       });
     };
-  }, [nodeId, detailed]);
+  }, [nodeId, overlay]);
 
-  useEffect(() => {
-    void submit({ type: 'browser.navigate', nodeId, url: browser.url });
-  }, [nodeId, browser.url]);
+  const modeLabel =
+    mode === 'web' ? 'WEB' : mode === 'headless' ? 'HEADLESS' : 'MIRROR';
+  const title =
+    label ||
+    (mode === 'mirror' ? sourceName || sourceId || 'window' : url || 'about:blank');
 
   return (
-    <div className="art-browser nowheel" ref={ref}>
-      {!detailed && <Empty text={browser.url} />}
+    <div className="art-appview nowheel nodrag" ref={ref}>
+      <div className="art-appview-bar">
+        <span className={`art-appview-mode mode-${mode}`}>{modeLabel}</span>
+        <span className="art-appview-title" title={title}>
+          {title}
+        </span>
+        {(mode === 'web' || mode === 'headless') && url.startsWith('http') && (
+          <button
+            type="button"
+            className="art-btn"
+            onClick={() => void window.zmtki.openExternal(url)}
+          >
+            ↗
+          </button>
+        )}
+      </div>
+      <div className="art-appview-body">
+        {overlay ? (
+          <div className="art-appview-slot" />
+        ) : frame ? (
+          <img className="art-appview-frame" src={frame} alt={title} draggable={false} />
+        ) : (
+          <Empty text={mode === 'mirror' ? 'Ожидание кадра окна…' : 'Загрузка…'} />
+        )}
+      </div>
     </div>
+  );
+}
+
+registerArtifact<DemoArtifactSpec>('demo', ({ nodeId, spec, detailed }) => (
+  <AppViewSurface
+    nodeId={nodeId}
+    mode="web"
+    url={spec.url}
+    sourceId=""
+    sourceName=""
+    fps={8}
+    live
+    detailed={detailed}
+    label={spec.url}
+  />
+));
+
+registerArtifact<AppViewArtifactSpec>('appView', ({ nodeId, spec, detailed }) => (
+  <AppViewSurface
+    nodeId={nodeId}
+    mode={spec.mode}
+    url={spec.url}
+    sourceId={spec.sourceId}
+    sourceName={spec.sourceName}
+    fps={spec.fps}
+    live={spec.live}
+    detailed={detailed}
+  />
+));
+
+registerArtifact<PortalArtifactSpec>('portal', ({ spec }) => (
+  <div className="art-portal">
+    <div className="art-portal-head">
+      ↗ {spec.remoteBoardName} / {spec.target.nodeId}
+    </div>
+    <pre className="art-portal-body nowheel">{spec.snapshot}</pre>
+  </div>
+));
+
+/**
+ * Legacy browser artifact — same live overlay host as appView mode=web.
+ */
+registerArtifact('browser', ({ nodeId, spec, detailed }: ArtifactViewProps) => {
+  const browser = spec as unknown as { url: string; live: boolean };
+  return (
+    <AppViewSurface
+      nodeId={nodeId}
+      mode="web"
+      url={browser.url}
+      sourceId=""
+      sourceName=""
+      fps={8}
+      live={browser.live !== false}
+      detailed={detailed}
+      label={browser.url}
+    />
   );
 });

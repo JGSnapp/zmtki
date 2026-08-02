@@ -33,11 +33,25 @@ export const OpSchema = z.discriminatedUnion('type', [
     name: z.string(),
     persona: z.string().default(''),
     endpointId: z.string().optional(),
-    model: z.string().optional()
+    model: z.string().optional(),
+    bridge: z
+      .object({
+        kind: z.enum(['builtin', 'mcp', 'command']).default('builtin'),
+        mcpServer: z.string().default(''),
+        mcpTool: z.string().default(''),
+        command: z.string().default('')
+      })
+      .optional()
   }),
   z.object({ type: z.literal('agent.update'), agentId: z.string(), patch: AgentSchema.partial() }),
   z.object({ type: z.literal('agent.delete'), agentId: z.string() }),
   z.object({ type: z.literal('agent.interrupt'), agentId: z.string() }),
+  z.object({
+    type: z.literal('agent.placeFrame'),
+    agentId: z.string(),
+    position: z.object({ x: z.number(), y: z.number() }).optional()
+  }),
+  z.object({ type: z.literal('agent.detachFrame'), agentId: z.string() }),
 
   z.object({ type: z.literal('room.list') }),
   z.object({
@@ -50,6 +64,7 @@ export const OpSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('room.update'), roomId: z.string(), patch: RoomSchema.partial() }),
   z.object({ type: z.literal('room.delete'), roomId: z.string() }),
+  z.object({ type: z.literal('room.clear'), roomId: z.string() }),
   z.object({
     type: z.literal('room.send'),
     roomId: z.string(),
@@ -122,6 +137,28 @@ export const OpSchema = z.discriminatedUnion('type', [
     bounds: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).nullable(),
     visible: z.boolean()
   }),
+
+  /** Open / reconfigure a live appView session in the host process. */
+  z.object({
+    type: z.literal('appView.open'),
+    nodeId: z.string(),
+    mode: z.enum(['web', 'headless', 'mirror']),
+    url: z.string().default('about:blank'),
+    sourceId: z.string().default(''),
+    sourceName: z.string().default(''),
+    fps: z.number().int().min(1).max(30).default(8),
+    live: z.boolean().default(true)
+  }),
+  z.object({ type: z.literal('appView.navigate'), nodeId: z.string(), url: z.string() }),
+  z.object({
+    type: z.literal('appView.setBounds'),
+    boardId: z.string(),
+    nodeId: z.string(),
+    bounds: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).nullable(),
+    visible: z.boolean()
+  }),
+  z.object({ type: z.literal('appView.stop'), nodeId: z.string() }),
+  z.object({ type: z.literal('appView.listSources') }),
 
   z.object({ type: z.literal('provider.list') }),
   z.object({

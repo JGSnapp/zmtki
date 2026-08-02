@@ -43,28 +43,49 @@ export const DEFAULT_ARTIFACT_ETIQUETTE: ArtifactEtiquetteRule[] = [
     id: 'semantic-medium',
     title: 'Семантический формат (Semantic Medium)',
     body:
-      'Никаких простыней текста. Код — diff или fileFragment; архитектура — mermaid; данные — chart или table; задачи — kanban или todo; интерфейсы — htmlWidget или demo; короткий пульс — status.',
+      'Никаких простыней текста. Код — diff или fileFragment; архитектура — mermaid; данные — chart или table; задачи — kanban или todo; интерфейсы — htmlWidget, demo или appView (web/headless/mirror); короткий пульс — status.',
     enabled: true
   },
   {
     id: 'aesthetics',
     title: 'Эстетика «доски детектива» (Aesthetics)',
     body:
-      'Оформляй пространство структурно и читаемо: как доска расследования или аккуратный майндмап. Выравнивай элементы (board_arrange / board_place), не допускай наложений, компонуй вокруг смысловых центров. Если есть стрелки — оставляй воздух между узлами и раскладывай через board_arrange layout=flow.',
+      'Каждый раз после того как выставил или сдвинул артефакты — проверь эстетичность, не оставляй «как получилось». Смотри: нет ли наложений и пересечений блоков/стрелок; ровные ли ряды и зазоры (воздух между карточками, без дыр и без слипания); читаются ли подписи связей; не схлопнуто ли всё в одну колонку/ряд без нужды. Средства: board_read (координаты/размеры), ответ инструмента при spatial-конфликте, board_arrange / board_place с другим gap/relation, fromSide/toSide. Когда схема из нескольких узлов или сомневаешься глазами — board_screenshot и по фото доски поправь раскладку. Схемы со стрелками — layout=graph; без стрелок — board_place.',
     enabled: true
   },
   {
     id: 'topology',
     title: 'Обязательная связность (Topology)',
     body:
-      'Соединяй зависимые артефакты стрелками (board_connect). Если фиксишь баг — связь от лога/ошибки к коду. Не связывай «всех со всеми». После нескольких связей вызови board_arrange layout=flow: слои по направлению связей, больше отступы, минимум пересечений линий.',
+      'Соединяй зависимые артефакты стрелками (board_connect). Не связывай «всех со всеми». После нескольких связей вызови board_arrange layout=graph — слои по направлению связей и воздух под подписи. layout=flow — только для строго линейных пайплайнов слева→направо.',
     enabled: true
   },
   {
     id: 'edge-clarity',
     title: 'Чистые связи (Edge Clarity)',
     body:
-      'Схемы со стрелками не должны выглядеть клубком. Давай узлам пространство; выстраивай поток слева направо или сверху вниз; избегай пересечений и длинных диагоналей. Предпочитай board_arrange layout=flow вместо ручных пикселей.',
+      'Схемы со стрелками не должны выглядеть клубком. Используй board_arrange layout=graph (tb для деревьев/вики, lr для пайплайнов) и fromSide/toSide. Не ставь связанные узлы вплотную — подписи линий должны читаться.',
+    enabled: true
+  },
+  {
+    id: 'edge-air',
+    title: 'Воздух для стрелок (Edge Air)',
+    body:
+      'Если соединяешь блоки линиями, оставляй воздух: board_arrange layout=graph с крупным gapY (≥120 при tb) или board_place gap≥80. Стороны — fromSide/toSide или auto.',
+    enabled: true
+  },
+  {
+    id: 'layout-plan',
+    title: 'План раскладки (Layout Plan)',
+    body:
+      'Перед схемой из нескольких связанных узлов спланируй направление: дерево/вики → board_arrange layout=graph direction=tb; пайплайн → layout=graph direction=lr или layout=flow. Создавай узлы, соединяй, затем arrange=graph. Если сомневаешься — board_screenshot и поправь.',
+    enabled: true
+  },
+  {
+    id: 'human-editors',
+    title: 'Редакторы для человека (Human Editors)',
+    body:
+      'Для текста, который человек будет править руками, используй note (простой текст), blocks (документ по блокам, как в Notion), codePad (код), markdown. Не прячь редактируемый контент только в status/htmlWidget.',
     enabled: true
   },
   {
@@ -78,14 +99,14 @@ export const DEFAULT_ARTIFACT_ETIQUETTE: ArtifactEtiquetteRule[] = [
     id: 'grouping',
     title: 'Локальность и группировка (Grouping)',
     body:
-      'Артефакты одной задачи держи компактно (board_arrange / board_place) и объединяй в смысловые блоки с accent (board_group), чтобы их можно было двигать вместе.',
+      'Артефакты одной задачи держи рядом (board_place) и объединяй подложкой board_group (по умолчанию позиции сохраняются). Передавай в nodeIds все участники группы, чтобы синяя/цветная область охватила весь bbox. Не вызывай board_group ради «выровнять в колонку».',
     enabled: true
   },
   {
     id: 'lifecycle',
     title: 'Чистота и свёртывание (Lifecycle)',
     body:
-      'Завершил подзадачу — сверни узел (board_set_state: widget/icon/ghost), оставь компактный status или удали неактуальные временные логи/файлы (board_delete). Не копи мусор по мере продвижения.',
+      'Завершил подзадачу — сверни полезное до widget/icon (board_set_state) или удали неактуальное через board_delete. Не используй ghost/архив по умолчанию — только если пользователь явно просит сохранить в архиве. Не копи мусор по мере продвижения.',
     enabled: true
   },
   {
@@ -113,7 +134,14 @@ export const DEFAULT_ARTIFACT_ETIQUETTE: ArtifactEtiquetteRule[] = [
     id: 'signal-density',
     title: 'Информационная плотность (Signal)',
     body:
-      'Не оставляй на доске бессодержательные узлы: пустые status/todo/markdown, «заглушки», артефакты без факта, вывода или следующего шага. Каждый видимый узел должен говорить человеку что-то важное; иначе сверни (board_set_state) или удали (board_delete).',
+      'Не оставляй на доске бессодержательные узлы: пустые status/todo/markdown, «заглушки», артефакты без факта, вывода или следующего шага. Каждый видимый узел должен говорить человеку что-то важное; иначе удали (board_delete) или сверни до widget/icon. Архив (ghost) — только по явной просьбе.',
+    enabled: true
+  },
+  {
+    id: 'spatial-safety',
+    title: 'Пространственная аккуратность',
+    body:
+      'Перед размещением и связями избегай наложений блоков и пересечений стрелок. Конфликт геометрии приходит тебе в ответ инструмента (не человеку): сначала смени place/gap/fromSide/toSide или board_arrange layout=graph; acceptSpatialRisk=true — только если осознанно оставляешь пересечение. Когда работаешь с блоком — охвати его рамкой (board_move_frame aroundNodeIds).',
     enabled: true
   },
   {
@@ -129,20 +157,66 @@ function cloneEtiquette(rules: readonly ArtifactEtiquetteRule[]): ArtifactEtique
   return rules.map((r) => ({ ...r }));
 }
 
-/** Append factory rules whose ids are missing (does not overwrite user edits). */
+/** Layout guidance we refresh from factory text (keeps user's enabled flag). */
+const ETIQUETTE_LAYOUT_SYNC_IDS = new Set([
+  'aesthetics',
+  'topology',
+  'edge-clarity',
+  'edge-air',
+  'layout-plan',
+  'grouping',
+  'lifecycle',
+  'signal-density',
+  'spatial-safety'
+]);
+
+/**
+ * Append factory rules whose ids are missing.
+ * For layout-related ids, also refresh title/body from factory so prompt fixes
+ * reach existing installs without wiping custom enabled flags.
+ */
 export function mergeMissingEtiquetteDefaults(
   current: readonly ArtifactEtiquetteRule[]
 ): { rules: ArtifactEtiquetteRule[]; added: boolean } {
-  const have = new Set(current.map((r) => r.id));
+  const factoryById = new Map(DEFAULT_ARTIFACT_ETIQUETTE.map((r) => [r.id, r]));
+  let changed = false;
+  const rules = current.map((r) => {
+    const factory = factoryById.get(r.id);
+    if (
+      factory &&
+      ETIQUETTE_LAYOUT_SYNC_IDS.has(r.id) &&
+      (r.body !== factory.body || r.title !== factory.title)
+    ) {
+      changed = true;
+      return { ...r, title: factory.title, body: factory.body };
+    }
+    return { ...r };
+  });
+  const have = new Set(rules.map((r) => r.id));
   const missing = DEFAULT_ARTIFACT_ETIQUETTE.filter((r) => !have.has(r.id)).map((r) => ({ ...r }));
-  if (missing.length === 0) return { rules: cloneEtiquette(current), added: false };
-  return { rules: [...current.map((r) => ({ ...r })), ...missing], added: true };
+  if (missing.length === 0) return { rules, added: changed };
+  return { rules: [...rules, ...missing], added: true };
 }
 
 export const AppSettingsSchema = z.object({
   /** Endpoint id used by agents that do not override it. */
   defaultEndpointId: z.string().nullable().default(null),
   defaultModel: z.string().nullable().default(null),
+
+  /**
+   * Optional cheaper model for light work (board events, simple reactions).
+   * When unset, routing falls back to defaultEndpointId/defaultModel.
+   */
+  weakEndpointId: z.string().nullable().default(null),
+  weakModel: z.string().nullable().default(null),
+  /**
+   * Optional vision-capable model for board screenshots / image understanding.
+   * When unset, screenshot turns escalate to the strong (default) model.
+   */
+  visionEndpointId: z.string().nullable().default(null),
+  visionModel: z.string().nullable().default(null),
+  /** Route board events / light turns to weak; escalate to strong when needed. */
+  modelRouting: z.boolean().default(true),
 
   /**
    * Global cap on turns running at once. Without it, five open projects with
@@ -173,11 +247,14 @@ export const AppSettingsSchema = z.object({
 
   theme: z.enum(['dark', 'light']).default('dark'),
   locale: z.enum(['ru', 'en']).default('ru'),
+  /** Chat message / compose font size in px. */
+  chatFontSize: z.number().int().min(11).max(18).default(13),
 
   /** Default room guards, copied into each new room. */
   defaultMaxHops: z.number().int().min(0).max(50).default(6),
   defaultStallThreshold: z.number().int().min(1).max(20).default(4),
-  defaultRoomTokenBudget: z.number().int().positive().nullable().default(400_000),
+  /** null = без лимита токенов на комнату (пауза по бюджету отключена). */
+  defaultRoomTokenBudget: z.number().int().positive().nullable().default(null),
 
   /**
    * Artifact etiquette rules injected into the agent system prompt.

@@ -69,6 +69,7 @@ export type EventMsg =
   | { type: 'room.list'; rooms: Room[] }
   | { type: 'room.message'; message: RoomMessage }
   | { type: 'room.updated'; room: Room }
+  | { type: 'room.cleared'; roomId: string }
 
   | { type: 'comment.threads'; boardId: string; threads: CommentThread[] }
 

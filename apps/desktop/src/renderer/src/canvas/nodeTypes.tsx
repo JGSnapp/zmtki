@@ -1,7 +1,7 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type JSX } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
-import type { BoardNode } from '@zmtki/board-schema';
+import { Handle, NodeResizer, NodeToolbar, Position, type NodeProps } from '@xyflow/react';
+import type { BoardNode, EdgeSide } from '@zmtki/board-schema';
 import { artifactRenderer } from '../artifacts/registry.js';
 import { submit, useStore } from '../store.js';
 import { strokeToPath } from './freehand.js';
@@ -9,6 +9,41 @@ import { strokeToPath } from './freehand.js';
 export interface CanvasNodeData extends Record<string, unknown> {
   node: BoardNode;
   detailed: boolean;
+}
+
+const SIDE_POSITION: Record<EdgeSide, Position> = {
+  left: Position.Left,
+  right: Position.Right,
+  top: Position.Top,
+  bottom: Position.Bottom
+};
+
+/** Four-side ports so edges can attach to nearest or explicit faces. */
+function NodePorts({ connectable = true }: { connectable?: boolean } = {}): JSX.Element {
+  return (
+    <>
+      {(Object.keys(SIDE_POSITION) as EdgeSide[]).map((side) => (
+        <Handle
+          key={`t-${side}`}
+          id={side}
+          type="target"
+          position={SIDE_POSITION[side]}
+          className="handle"
+          isConnectable={connectable}
+        />
+      ))}
+      {(Object.keys(SIDE_POSITION) as EdgeSide[]).map((side) => (
+        <Handle
+          key={`s-${side}`}
+          id={side}
+          type="source"
+          position={SIDE_POSITION[side]}
+          className="handle"
+          isConnectable={connectable}
+        />
+      ))}
+    </>
+  );
 }
 
 const TONE_LABEL: Record<string, string> = {
@@ -183,7 +218,26 @@ export const ArtifactNodeView = memo(({ id, data, selected }: NodeProps): JSX.El
         </button>
       </header>
       {visualState !== 'ghost' && (
-        <div className="node-body nodrag">
+        <div
+          className="node-body"
+          onPointerDownCapture={(e) => {
+            // React Flow only skips drag for `.nodrag` — tag interactive targets.
+            const el = e.target as HTMLElement | null;
+            if (!el?.closest) return;
+            if (
+              el.closest(
+                'input, textarea, button, select, a, audio, video, iframe, .nodrag, .nowheel'
+              )
+            ) {
+              el.classList?.add?.('nodrag');
+              const host = el.closest(
+                'input, textarea, button, select, a, audio, video, iframe, .nodrag, .nowheel'
+              ) as HTMLElement | null;
+              host?.classList.add('nodrag');
+            }
+          }}
+        >
+          {/* Body is draggable; interactive widgets use `.nodrag`. */}
           {Renderer ? (
             <Renderer nodeId={id} spec={spec} detailed={detailed} selected={selected} />
           ) : (
@@ -192,17 +246,16 @@ export const ArtifactNodeView = memo(({ id, data, selected }: NodeProps): JSX.El
         </div>
       )}
       {visualState === 'ghost' && <div className="ghost-label">архив · двойной клик</div>}
-      <Handle type="target" position={Position.Left} className="handle" />
-      <Handle type="source" position={Position.Right} className="handle" />
+      <NodePorts />
     </div>
   );
 });
 ArtifactNodeView.displayName = 'ArtifactNodeView';
 
 /**
- * An agent's frame. Rendered behind everything and never captures pointer events
- * in its interior, so artifacts inside stay clickable and dragging the frame
- * only works from its title bar.
+ * An agent's frame. Border sits under artifacts (low RF z-index). The badge is
+ * portaled via NodeToolbar so it stays readable above cards. Interior never
+ * captures pointer events — drag only from the toolbar / resizer.
  */
 export const FrameNodeView = memo(({ data, selected }: NodeProps): JSX.Element => {
   const { node } = data as CanvasNodeData;
@@ -215,44 +268,67 @@ export const FrameNodeView = memo(({ data, selected }: NodeProps): JSX.Element =
 
   if (node.type !== 'frame') return <div />;
   const accent = node.style.stroke;
+  const working = !!agent && isWorking(agent.status);
+  const softBorder = `color-mix(in srgb, ${accent} ${working ? 42 : 28}%, transparent)`;
 
   return (
     <div
-      className={`node frame ${selected ? 'selected' : ''} ${agent?.status === 'running' ? 'busy' : ''}`}
-      style={{ borderColor: accent, boxShadow: selected ? `0 0 0 2px ${accent}55` : undefined }}
+      className={`node frame ${selected ? 'selected' : ''} ${working ? 'busy' : 'idle'} ${agentId ? 'agent-owned' : ''}`}
+      style={{
+        borderColor: softBorder,
+        boxShadow: selected ? `0 0 0 1px ${accent}40` : undefined
+      }}
     >
       <NodeResizer minWidth={320} minHeight={240} isVisible={selected} lineClassName="resize-line" />
-      <div className="frame-head" style={{ background: `${accent}22`, borderColor: accent }}>
-        <span className="frame-avatar" style={{ background: accent }}>
-          {(agent?.name ?? node.label).slice(0, 1).toUpperCase()}
-        </span>
-        <span className="frame-title">{node.label || 'Рамка'}</span>
-        {agent && (
-          <>
-            <span className={`frame-status status-${agent.status}`}>{agent.status}</span>
-            <button
-              className="frame-follow nodrag"
-              title="Следить за агентом"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFollow(agent.id);
-              }}
-            >
-              ⌖
-            </button>
-          </>
-        )}
-      </div>
-      {(headline || live) && (
-        <div className="frame-live nodrag">
-          {live?.calls.at(-1)?.name ?? headline}
-          {live && <span className="frame-spinner" />}
+      <NodeToolbar isVisible position={Position.Top} offset={6} align="start" className="frame-toolbar">
+        <div
+          className="frame-head"
+          style={{
+            background: `color-mix(in srgb, ${accent} 14%, #161a22)`,
+            borderColor: `color-mix(in srgb, ${accent} 45%, transparent)`
+          }}
+        >
+          <span className="frame-avatar" style={{ background: accent }}>
+            {(agent?.name ?? node.label).slice(0, 1).toUpperCase()}
+          </span>
+          <span className="frame-title">{node.label || 'Рамка'}</span>
+          {agent && (
+            <>
+              {working && <span className={`frame-status status-${agent.status}`}>{agent.status}</span>}
+              <button
+                type="button"
+                className="frame-follow nodrag"
+                title="Следить за агентом"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFollow(agent.id);
+                }}
+              >
+                ⌖
+              </button>
+            </>
+          )}
         </div>
-      )}
+        {(headline || live) && working && (
+          <div className="frame-live nodrag">
+            {live?.calls.at(-1)?.name ?? headline}
+            {live && <span className="frame-spinner" />}
+          </div>
+        )}
+      </NodeToolbar>
     </div>
   );
 });
 FrameNodeView.displayName = 'FrameNodeView';
+
+function isWorking(status: string): boolean {
+  return (
+    status === 'thinking' ||
+    status === 'running' ||
+    status === 'waitingApproval' ||
+    status === 'waitingInput'
+  );
+}
 
 export const StickyNodeView = memo(({ id, data, selected }: NodeProps): JSX.Element => {
   const { node } = data as CanvasNodeData;
@@ -268,7 +344,6 @@ export const StickyNodeView = memo(({ id, data, selected }: NodeProps): JSX.Elem
       style={{ background: node.style.fill, color: node.style.color }}
       onDoubleClick={() => setEditing(id)}
     >
-      <NodeResizer minWidth={100} minHeight={80} isVisible={selected} lineClassName="resize-line" />
       <EditableText
         className="sticky-text nodrag"
         value={node.text}
@@ -279,8 +354,8 @@ export const StickyNodeView = memo(({ id, data, selected }: NodeProps): JSX.Elem
         }}
         style={{ fontSize: node.style.fontSize, textAlign: node.style.align }}
       />
-      <Handle type="target" position={Position.Left} className="handle" />
-      <Handle type="source" position={Position.Right} className="handle" />
+      <NodePorts connectable={!selected} />
+      <NodeResizer minWidth={100} minHeight={80} isVisible={selected} lineClassName="resize-line" />
     </div>
   );
 });
@@ -325,58 +400,54 @@ export const ShapeNodeView = memo(({ id, data, selected }: NodeProps): JSX.Eleme
 
   if (node.type !== 'shape') return <div />;
   const { style } = node;
+  // Unit square viewBox — the node box owns size/position, so resize cannot
+  // desync the SVG geometry from the React Flow wrapper.
+  const sw = Math.min(8, Math.max(1, style.strokeWidth));
+  const inset = sw / 2;
+  const radius = Math.min(50, Math.max(0, (style.radius / Math.max(node.size.w, 1)) * 100));
 
   const dash =
     style.strokeStyle === 'dashed'
-      ? `${style.strokeWidth * 4} ${style.strokeWidth * 3}`
+      ? `${sw * 4} ${sw * 3}`
       : style.strokeStyle === 'dotted'
-        ? `1 ${style.strokeWidth * 2.5}`
+        ? `1 ${sw * 2.5}`
         : undefined;
 
   const common = {
     fill: style.fill,
     stroke: style.stroke,
-    strokeWidth: style.strokeWidth,
+    strokeWidth: sw,
     strokeDasharray: dash,
-    strokeLinecap: 'round' as const
+    strokeLinecap: 'round' as const,
+    vectorEffect: 'non-scaling-stroke' as const
   };
 
   return (
     <div className={`node shape ${selected ? 'selected' : ''}`} onDoubleClick={() => setEditing(id)}>
-      <NodeResizer minWidth={24} minHeight={24} isVisible={selected} lineClassName="resize-line" />
-      <svg width="100%" height="100%" viewBox={`0 0 ${node.size.w} ${node.size.h}`} preserveAspectRatio="none">
+      <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
         {node.shape === 'rectangle' && (
           <rect
-            x={style.strokeWidth / 2}
-            y={style.strokeWidth / 2}
-            width={Math.max(0, node.size.w - style.strokeWidth)}
-            height={Math.max(0, node.size.h - style.strokeWidth)}
-            rx={style.radius}
+            x={inset}
+            y={inset}
+            width={100 - sw}
+            height={100 - sw}
+            rx={radius}
             {...common}
           />
         )}
         {node.shape === 'ellipse' && (
-          <ellipse
-            cx={node.size.w / 2}
-            cy={node.size.h / 2}
-            rx={Math.max(0, node.size.w / 2 - style.strokeWidth / 2)}
-            ry={Math.max(0, node.size.h / 2 - style.strokeWidth / 2)}
-            {...common}
-          />
+          <ellipse cx={50} cy={50} rx={50 - inset} ry={50 - inset} {...common} />
         )}
         {node.shape === 'diamond' && (
-          <polygon
-            points={`${node.size.w / 2},2 ${node.size.w - 2},${node.size.h / 2} ${node.size.w / 2},${node.size.h - 2} 2,${node.size.h / 2}`}
-            {...common}
-          />
+          <polygon points={`50,${inset} ${100 - inset},50 50,${100 - inset} ${inset},50`} {...common} />
         )}
         {node.shape === 'triangle' && (
-          <polygon points={`${node.size.w / 2},2 ${node.size.w - 2},${node.size.h - 2} 2,${node.size.h - 2}`} {...common} />
+          <polygon points={`50,${inset} ${100 - inset},${100 - inset} ${inset},${100 - inset}`} {...common} />
         )}
-        {node.shape === 'star' && <polygon points={starPoints(node.size.w, node.size.h)} {...common} />}
+        {node.shape === 'star' && <polygon points={starPoints(100, 100)} {...common} />}
         {node.shape === 'arrowBlock' && (
           <polygon
-            points={`2,${node.size.h * 0.3} ${node.size.w * 0.6},${node.size.h * 0.3} ${node.size.w * 0.6},2 ${node.size.w - 2},${node.size.h / 2} ${node.size.w * 0.6},${node.size.h - 2} ${node.size.w * 0.6},${node.size.h * 0.7} 2,${node.size.h * 0.7}`}
+            points={`${inset},30 60,30 60,${inset} ${100 - inset},50 60,${100 - inset} 60,70 ${inset},70`}
             {...common}
           />
         )}
@@ -393,8 +464,9 @@ export const ShapeNodeView = memo(({ id, data, selected }: NodeProps): JSX.Eleme
           style={{ color: style.color, fontSize: style.fontSize }}
         />
       )}
-      <Handle type="target" position={Position.Left} className="handle" />
-      <Handle type="source" position={Position.Right} className="handle" />
+      {/* Ports share edge midpoints with the resizer — disable while selected. */}
+      <NodePorts connectable={!selected} />
+      <NodeResizer minWidth={24} minHeight={24} isVisible={selected} lineClassName="resize-line" />
     </div>
   );
 });
@@ -438,13 +510,14 @@ export const GroupNodeView = memo(({ data, selected }: NodeProps): JSX.Element =
     <div
       className={`node group ${selected ? 'selected' : ''}`}
       style={{
-        borderColor: accent,
-        background: node.style.fill || `${accent}14`,
-        boxShadow: selected ? `0 0 0 2px ${accent}66` : undefined
+        border: 'none',
+        outline: 'none',
+        background: 'rgb(20 24 32 / 55%)',
+        boxShadow: selected ? `inset 0 0 0 1px ${accent}40` : 'none'
       }}
     >
       <NodeResizer minWidth={200} minHeight={120} isVisible={selected} lineClassName="resize-line" />
-      <span className="group-label" style={{ color: accent, borderColor: accent }}>
+      <span className="group-label nodrag" style={{ color: accent, background: '#141820' }}>
         {node.label || 'Группа'}
       </span>
     </div>

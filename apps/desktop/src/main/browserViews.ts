@@ -1,88 +1,43 @@
-import { WebContentsView, type BrowserWindow } from 'electron';
+import type { BrowserWindow } from 'electron';
+import { AppViewHost, type ViewBounds } from './appViewHost.js';
 
-export interface ViewBounds {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+export type { ViewBounds };
 
 /**
- * Real browser windows as board artifacts.
- *
- * An iframe cannot host most real sites (X-Frame-Options, cross-origin
- * scripting), so this uses Electron's WebContentsView, which is a genuine
- * browser. The cost is that it renders above the canvas rather than inside it:
- * the renderer sends the artifact's screen rectangle on every camera change and
- * the view is repositioned to match, then hidden entirely when the node scrolls
- * out of sight or the user zooms far enough out that a screenshot will do.
+ * Backward-compatible wrapper around {@link AppViewHost} for legacy `browser`
+ * artifacts. New code should use AppViewHost / `appView` directly.
  */
 export class BrowserArtifactHost {
-  private views = new Map<string, WebContentsView>();
+  private readonly host: AppViewHost;
 
-  constructor(private readonly window: BrowserWindow) {}
+  constructor(window: BrowserWindow, sendFrame?: (nodeId: string, dataUrl: string) => void) {
+    this.host = new AppViewHost(window, sendFrame ?? (() => undefined));
+  }
 
-  private ensure(nodeId: string): WebContentsView {
-    const existing = this.views.get(nodeId);
-    if (existing) return existing;
-
-    const view = new WebContentsView({
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true
-      }
-    });
-    this.window.contentView.addChildView(view);
-    view.setVisible(false);
-    this.views.set(nodeId, view);
-    return view;
+  /** Expose the underlying host for appView wiring. */
+  asAppViewHost(): AppViewHost {
+    return this.host;
   }
 
   async navigate(nodeId: string, url: string): Promise<void> {
-    const view = this.ensure(nodeId);
-    try {
-      await view.webContents.loadURL(url);
-    } catch {
-      // A failed load leaves the error page visible, which is the right report.
-    }
+    await this.host.navigateBrowser(nodeId, url);
   }
 
   setBounds(nodeId: string, bounds: ViewBounds | null, visible: boolean): void {
-    const view = this.views.get(nodeId);
-    if (!view) return;
-
-    if (!visible || !bounds || bounds.w < 40 || bounds.h < 40) {
-      view.setVisible(false);
-      return;
-    }
-
-    view.setBounds({
-      x: Math.round(bounds.x),
-      y: Math.round(bounds.y),
-      width: Math.round(bounds.w),
-      height: Math.round(bounds.h)
-    });
-    view.setVisible(true);
+    this.host.setBrowserBounds(nodeId, bounds, visible);
   }
 
-  /** PNG data URL used as the stand-in when the view is hidden. */
   async capture(nodeId: string): Promise<string | null> {
-    const view = this.views.get(nodeId);
-    if (!view) return null;
-    const image = await view.webContents.capturePage();
-    return image.isEmpty() ? null : image.toDataURL();
+    // Frames are pushed over IPC; pull one-shot via open headless capture if needed.
+    void nodeId;
+    return null;
   }
 
   destroy(nodeId: string): void {
-    const view = this.views.get(nodeId);
-    if (!view) return;
-    this.window.contentView.removeChildView(view);
-    view.webContents.close();
-    this.views.delete(nodeId);
+    this.host.destroy(nodeId);
   }
 
   destroyAll(): void {
-    for (const nodeId of [...this.views.keys()]) this.destroy(nodeId);
+    this.host.destroyAll();
   }
 }

@@ -56,19 +56,43 @@ export function useNavigation(): Navigation {
       if (agent.homeBoardId !== state.activeBoardId && state.boards.has(agent.homeBoardId)) {
         state.setActiveBoard(agent.homeBoardId);
       }
-      const board = useStore.getState().activeBoard();
-      const frame = [...(board?.nodes.values() ?? [])].find(
-        (node) => node.type === 'frame' && node.agentId === agentId
-      );
-      if (!frame) return;
-      focusRect({ x: frame.position.x, y: frame.position.y, w: frame.size.w, h: frame.size.h });
 
-      const room = useStore
-        .getState()
-        .rooms.find((r) => r.kind === 'dm' && r.members.some((m) => m.id === agentId));
-      if (room) useStore.getState().setActiveRoom(room.id);
+      const placeAndFocus = async (): Promise<void> => {
+        let board = useStore.getState().activeBoard();
+        let frame = [...(board?.nodes.values() ?? [])].find(
+          (node) => node.type === 'frame' && node.agentId === agentId
+        );
+        if (!frame) {
+          const vp = flow.getViewport();
+          const zoom = vp.zoom > 0 ? vp.zoom : 1;
+          const el = document.querySelector('.canvas-wrap') as HTMLElement | null;
+          const sw = el?.clientWidth ?? 1200;
+          const sh = el?.clientHeight ?? 800;
+          const cx = (-vp.x + sw / 2) / zoom;
+          const cy = (-vp.y + sh / 2) / zoom;
+          await submit({
+            type: 'agent.placeFrame',
+            agentId,
+            position: { x: cx - 600, y: cy - 450 }
+          });
+          board = useStore.getState().activeBoard();
+          frame = [...(board?.nodes.values() ?? [])].find(
+            (node) => node.type === 'frame' && node.agentId === agentId
+          );
+        }
+        if (frame) {
+          useStore.getState().setSelection([frame.id]);
+          focusRect({ x: frame.position.x, y: frame.position.y, w: frame.size.w, h: frame.size.h });
+        }
+        const room = useStore
+          .getState()
+          .rooms.find((r) => r.kind === 'dm' && r.members.some((m) => m.id === agentId));
+        if (room) useStore.getState().setActiveRoom(room.id);
+      };
+
+      void placeAndFocus();
     },
-    [focusRect]
+    [flow, focusRect]
   );
 
   const back = useCallback(() => {

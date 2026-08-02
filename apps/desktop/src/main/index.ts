@@ -16,14 +16,14 @@ import {
 } from 'electron';
 import { IPC, type CoreEvent, type EventMsg, type Submission } from '@zmtki/protocol';
 import { Workspace, type SecretStore } from '@zmtki/core';
-import { BrowserArtifactHost } from './browserViews.js';
+import { AppViewHost } from './appViewHost.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let workspace: Workspace | null = null;
-let browsers: BrowserArtifactHost | null = null;
+let appViews: AppViewHost | null = null;
 
 /**
  * Keys are encrypted with the OS keychain (DPAPI on Windows, Keychain on macOS)
@@ -148,7 +148,26 @@ async function createWindow(): Promise<void> {
     await window.loadFile(path.join(dirname, '../renderer/index.html'));
   }
 
-  browsers = new BrowserArtifactHost(window);
+  appViews = new AppViewHost(window, (nodeId, dataUrl) => {
+    if (!window || window.isDestroyed()) return;
+    window.webContents.send(IPC.appViewFrame, { nodeId, dataUrl });
+  });
+  workspace?.setAppViewBridge({
+    listSources: () => appViews!.listSources(),
+    open: (input) =>
+      appViews!.open(input.nodeId, {
+        mode: input.mode,
+        url: input.url,
+        sourceId: input.sourceId,
+        sourceName: input.sourceName,
+        fps: input.fps,
+        live: input.live
+      }),
+    navigate: (nodeId, url) => appViews!.navigate(nodeId, url),
+    stop: async (nodeId) => {
+      appViews?.destroy(nodeId);
+    }
+  });
 }
 
 function createTray(): void {
@@ -181,10 +200,9 @@ function wireWorkspace(ws: Workspace): void {
 
 function registerIpc(ws: Workspace): void {
   ipcMain.handle(IPC.submit, async (_event, submission: Submission) => {
-    // Browser artifacts need the window, which core deliberately knows nothing
-    // about, so those two ops are intercepted before dispatch.
+    // Live views need the BrowserWindow; core stays headless-agnostic.
     if (submission.op.type === 'browser.setBounds') {
-      browsers?.setBounds(
+      appViews?.setBrowserBounds(
         submission.op.nodeId,
         submission.op.bounds,
         submission.op.visible
@@ -192,8 +210,35 @@ function registerIpc(ws: Workspace): void {
       return { ok: true, value: null };
     }
     if (submission.op.type === 'browser.navigate') {
-      await browsers?.navigate(submission.op.nodeId, submission.op.url);
+      await appViews?.navigateBrowser(submission.op.nodeId, submission.op.url);
       return { ok: true, value: null };
+    }
+    if (submission.op.type === 'appView.setBounds') {
+      appViews?.setBounds(submission.op.nodeId, submission.op.bounds, submission.op.visible);
+      return { ok: true, value: null };
+    }
+    if (submission.op.type === 'appView.navigate') {
+      await appViews?.navigate(submission.op.nodeId, submission.op.url);
+      return { ok: true, value: null };
+    }
+    if (submission.op.type === 'appView.open') {
+      await appViews?.open(submission.op.nodeId, {
+        mode: submission.op.mode,
+        url: submission.op.url,
+        sourceId: submission.op.sourceId,
+        sourceName: submission.op.sourceName,
+        fps: submission.op.fps,
+        live: submission.op.live
+      });
+      return { ok: true, value: null };
+    }
+    if (submission.op.type === 'appView.stop') {
+      appViews?.destroy(submission.op.nodeId);
+      return { ok: true, value: null };
+    }
+    if (submission.op.type === 'appView.listSources') {
+      const sources = (await appViews?.listSources()) ?? [];
+      return { ok: true, value: sources };
     }
     return ws.submit(submission);
   });
@@ -300,6 +345,41 @@ if (!app.requestSingleInstanceLock()) {
     registerArtifactProtocol();
     registerStickerProtocol();
     await createWindow();
+    workspace.setDesktopCapture(async (opts) => {
+      if (!window || window.isDestroyed()) return null;
+      try {
+        let rect: Electron.Rectangle | undefined;
+        if (opts?.scope !== 'window') {
+          const bounds = (await window.webContents.executeJavaScript(`
+            (() => {
+              const el = document.querySelector('.react-flow') || document.querySelector('.board-canvas');
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              const x = Math.max(0, Math.round(r.x));
+              const y = Math.max(0, Math.round(r.y));
+              const width = Math.max(1, Math.round(r.width));
+              const height = Math.max(1, Math.round(r.height));
+              return { x, y, width, height };
+            })()
+          `)) as { x: number; y: number; width: number; height: number } | null;
+          if (bounds) rect = bounds;
+        }
+        const image = rect
+          ? await window.webContents.capturePage(rect)
+          : await window.webContents.capturePage();
+        if (image.isEmpty()) return null;
+        const size = image.getSize();
+        return {
+          mime: 'image/png',
+          base64: image.toPNG().toString('base64'),
+          width: size.width,
+          height: size.height
+        };
+      } catch (err) {
+        console.error('[capture] board screenshot failed', err);
+        return null;
+      }
+    });
     createTray();
     wireWorkspace(workspace);
     registerIpc(workspace);
@@ -320,6 +400,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     const ws = workspace;
     workspace = null;
+    appViews?.destroyAll();
+    appViews = null;
     await ws.shutdown();
     tray?.destroy();
     app.quit();

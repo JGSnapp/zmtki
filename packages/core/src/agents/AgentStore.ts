@@ -7,6 +7,7 @@ import {
   createFrameNode,
   newId,
   type Agent,
+  type AgentBridge,
   type AgentStatus,
   type FrameNode
 } from '@zmtki/board-schema';
@@ -22,6 +23,7 @@ export interface CreateAgentInput {
   endpointId?: string;
   model?: string;
   toolsets?: string[];
+  bridge?: Partial<AgentBridge>;
   /** Where to put the agent's frame; auto-placed to the right if omitted. */
   position?: { x: number; y: number };
 }
@@ -110,6 +112,7 @@ export class AgentStore {
     });
     this.board.apply({ origin: null, label: 'Создание агента', ops: [{ op: 'addNode', node: frame }] });
 
+    const bridgeKind = input.bridge?.kind ?? 'builtin';
     const agent = AgentSchema.parse({
       id,
       name: input.name,
@@ -123,7 +126,16 @@ export class AgentStore {
         model: input.model ?? '',
         fallbacks: []
       },
-      toolsets: input.toolsets ?? ['core', 'board', 'files', 'shell', 'web', 'rooms'],
+      bridge: {
+        kind: bridgeKind,
+        mcpServer: input.bridge?.mcpServer ?? '',
+        mcpTool: input.bridge?.mcpTool ?? '',
+        command: input.bridge?.command ?? ''
+      },
+      // External bridges do not need the full local tool surface.
+      toolsets:
+        input.toolsets ??
+        (bridgeKind === 'builtin' ? ['core', 'board', 'files', 'shell', 'web', 'rooms'] : ['rooms']),
       status: 'idle',
       createdAt: Date.now()
     });
@@ -180,6 +192,69 @@ export class AgentStore {
     this.onChange.emit(this.list());
   }
 
+  /** Remove the agent's frame from the board; the agent itself stays. */
+  detachFrame(agentId: string, opts?: { skipRemoveNode?: boolean }): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    const frame = this.frameOf(agentId);
+    if (frame && !opts?.skipRemoveNode) {
+      this.board.apply({
+        origin: null,
+        label: 'Убрать агента с доски',
+        ops: [{ op: 'removeNode', id: frame.id }]
+      });
+    }
+    if (agent.frameNodeId !== null) {
+      this.agents.set(agentId, { ...agent, frameNodeId: null });
+      this.saver.schedule();
+      this.onChange.emit(this.list());
+    }
+  }
+
+  /** Put the agent back on the board (or move an existing frame). */
+  placeFrame(agentId: string, position?: { x: number; y: number }): FrameNode | undefined {
+    const agent = this.agents.get(agentId);
+    if (!agent) return undefined;
+    const existing = this.frameOf(agentId);
+    if (existing) {
+      if (position) {
+        this.board.apply({
+          origin: null,
+          label: 'Перемещение рамки агента',
+          ops: [{ op: 'moveNodes', moves: [{ id: existing.id, position }] }]
+        });
+      }
+      return this.frameOf(agentId);
+    }
+
+    const frame = createFrameNode({
+      label: agent.name,
+      position: position ?? this.viewportFramePosition(),
+      size: FRAME_SIZE,
+      agentId: agent.id,
+      style: { stroke: agent.avatarColor }
+    });
+    this.board.apply({ origin: null, label: 'Агент на доску', ops: [{ op: 'addNode', node: frame }] });
+    this.agents.set(agentId, { ...agent, frameNodeId: frame.id });
+    this.saver.schedule();
+    this.onChange.emit(this.list());
+    return frame;
+  }
+
+  /** Rough centre of the current camera frustum in board coordinates. */
+  viewportFramePosition(): { x: number; y: number } {
+    const cam = this.board.camera;
+    const zoom = cam.zoom > 0 ? cam.zoom : 1;
+    const viewW = 1200 / zoom;
+    const viewH = 800 / zoom;
+    const left = -cam.x / zoom;
+    const top = -cam.y / zoom;
+    return {
+      x: left + viewW / 2 - FRAME_SIZE.w / 2,
+      y: top + viewH / 2 - FRAME_SIZE.h / 2
+    };
+  }
+
   setStatus(agentId: string, status: AgentStatus, headline = ''): void {
     const existing = this.agents.get(agentId);
     if (!existing) return;
@@ -204,7 +279,10 @@ export class AgentStore {
     );
   }
 
-  /** Recreates frames that went missing and repairs stale frame ids. */
+  /**
+   * Repair stale frame ids. Missing frames are treated as intentional
+   * (agent was removed from the board) — they are not recreated.
+   */
   private reconcileFrames(): void {
     for (const agent of this.list()) {
       const frame = this.frameOf(agent.id);
@@ -215,16 +293,10 @@ export class AgentStore {
         }
         continue;
       }
-      const created = createFrameNode({
-        label: agent.name,
-        position: this.nextFramePosition(),
-        size: FRAME_SIZE,
-        agentId: agent.id,
-        style: { stroke: agent.avatarColor }
-      });
-      this.board.apply({ origin: null, ops: [{ op: 'addNode', node: created }] });
-      this.agents.set(agent.id, { ...agent, frameNodeId: created.id });
-      this.saver.schedule();
+      if (agent.frameNodeId !== null) {
+        this.agents.set(agent.id, { ...agent, frameNodeId: null });
+        this.saver.schedule();
+      }
     }
   }
 

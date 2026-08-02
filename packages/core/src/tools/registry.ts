@@ -117,6 +117,37 @@ export interface ToolServices {
       contextNodeIds: string[];
     }): Promise<{ summary: string; error?: string }>;
   };
+  desktop?: {
+    /** PNG/JPEG of the visible board viewport for vision. */
+    captureBoard(opts?: { scope?: 'viewport' | 'window' }): Promise<{
+      mime: string;
+      base64: string;
+      width?: number;
+      height?: number;
+    } | null>;
+  };
+  /** Live web / headless / OS-window surfaces hosted by Electron main. */
+  appView?: {
+    listSources(): Promise<
+      Array<{ id: string; name: string; kind: 'window' | 'screen'; thumbnailDataUrl: string }>
+    >;
+    open(input: {
+      nodeId: string;
+      mode: 'web' | 'headless' | 'mirror';
+      url?: string;
+      sourceId?: string;
+      sourceName?: string;
+      fps?: number;
+      live?: boolean;
+    }): Promise<void>;
+    navigate(nodeId: string, url: string): Promise<void>;
+    stop(nodeId: string): Promise<void>;
+  };
+}
+
+export interface ToolImage {
+  mime: string;
+  base64: string;
 }
 
 export interface ToolResult {
@@ -125,6 +156,8 @@ export interface ToolResult {
   /** Node the call created or changed, so the UI can offer a jump link. */
   nodeId?: string | null;
   isError?: boolean;
+  /** Vision payloads — appended as a user multimodal message after the tool result. */
+  images?: ToolImage[];
 }
 
 export interface ToolDefinition {

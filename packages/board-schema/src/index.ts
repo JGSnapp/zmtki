@@ -2,6 +2,7 @@ export * from './ids.js';
 export * from './geometry.js';
 export * from './artifacts.js';
 export * from './nodes.js';
+export * from './edgeSides.js';
 export * from './board.js';
 export * from './comments.js';
 export * from './agents.js';

@@ -16,20 +16,31 @@ const TOOL_KEYS: Record<string, ToolName> = {
   c: 'comment'
 };
 
-function isTyping(target: EventTarget | null): boolean {
-  const element = target as HTMLElement | null;
-  if (!element) return false;
-  return (
-    element.tagName === 'INPUT' ||
-    element.tagName === 'TEXTAREA' ||
-    element.tagName === 'SELECT' ||
-    element.isContentEditable
-  );
+function isEditableElement(element: EventTarget | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT') {
+    return true;
+  }
+  if (element.isContentEditable) return true;
+  return Boolean(element.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+/** True when a text field has focus, or when a modal/dialog owns the keyboard. */
+function shouldIgnoreToolKeys(target: EventTarget | null): boolean {
+  if (isEditableElement(target) || isEditableElement(document.activeElement)) return true;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.closest('.modal-backdrop, .modal, .palette-box, .drawer')) {
+    return true;
+  }
+  if (target instanceof HTMLElement && target.closest('.modal-backdrop, .modal, .palette-box, .drawer')) {
+    return true;
+  }
+  return Boolean(document.querySelector('.modal-backdrop'));
 }
 
 /**
  * Global keyboard map. Single letters pick tools, which is only safe because
- * every text field is excluded first.
+ * every text field and modal is excluded first.
  */
 export function useShortcuts(): void {
   const { focusAgent, back } = useNavigation();
@@ -40,6 +51,7 @@ export function useShortcuts(): void {
       const mod = event.ctrlKey || event.metaKey;
 
       if (mod && event.key.toLowerCase() === 'k') {
+        if (shouldIgnoreToolKeys(event.target)) return;
         event.preventDefault();
         state.togglePalette();
         return;
@@ -54,7 +66,7 @@ export function useShortcuts(): void {
         return;
       }
 
-      if (isTyping(event.target)) return;
+      if (shouldIgnoreToolKeys(event.target) || useStore.getState().overlayOpen) return;
 
       // Alt+1..9 jumps to the nth agent of the active board, which is the
       // fastest way to move between working areas.

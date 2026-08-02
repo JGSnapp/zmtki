@@ -24,6 +24,14 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.event, listener);
   },
 
+  /** JPEG/PNG frames for appView headless/mirror (and web when overlay is off). */
+  onAppViewFrame(handler: (payload: { nodeId: string; dataUrl: string }) => void): () => void {
+    const listener = (_e: unknown, payload: { nodeId: string; dataUrl: string }): void =>
+      handler(payload);
+    ipcRenderer.on(IPC.appViewFrame, listener);
+    return () => ipcRenderer.removeListener(IPC.appViewFrame, listener);
+  },
+
   pickFolder(): Promise<string | null> {
     return ipcRenderer.invoke('zmtki:pickFolder') as Promise<string | null>;
   },

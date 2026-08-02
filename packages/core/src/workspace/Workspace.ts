@@ -73,6 +73,22 @@ export class Workspace {
   readonly approvals = new ApprovalBroker();
   readonly terminals = new TerminalManager();
 
+  /**
+   * Host-provided board capture (Electron main). Null in headless / tests.
+   * Wired via {@link setDesktopCapture}.
+   */
+  private desktopCapture:
+    | ((opts?: { scope?: 'viewport' | 'window' }) => Promise<{
+        mime: string;
+        base64: string;
+        width?: number;
+        height?: number;
+      } | null>)
+    | null = null;
+
+  /** Host-provided appView bridge (web / headless / mirror). */
+  private appViewBridge: NonNullable<ToolServices['appView']> | null = null;
+
   private db!: AppDatabase;
   private settings: AppSettings = DEFAULT_APP_SETTINGS;
   private searchKeys: SearchKeys = { brave: '', tavily: '', serper: '', googlePse: '' };
@@ -96,6 +112,23 @@ export class Workspace {
 
   constructor(private readonly appDir: string) {}
 
+  /** Electron (or other host) injects capture so agents can see the board. */
+  setDesktopCapture(
+    capture: ((opts?: { scope?: 'viewport' | 'window' }) => Promise<{
+      mime: string;
+      base64: string;
+      width?: number;
+      height?: number;
+    } | null>) | null
+  ): void {
+    this.desktopCapture = capture;
+  }
+
+  /** Electron injects live appView hosting (WebContentsView + desktopCapturer). */
+  setAppViewBridge(bridge: NonNullable<ToolServices['appView']> | null): void {
+    this.appViewBridge = bridge;
+  }
+
   async init(secrets?: SecretStore): Promise<void> {
     if (secrets) this.secrets = secrets;
 
@@ -103,8 +136,14 @@ export class Workspace {
     const loaded = AppSettingsSchema.parse(this.db.getKv<unknown>(KV_SETTINGS, {}));
     // Own the array; append any new factory rules the user doesn't have yet.
     const etiquette = mergeMissingEtiquetteDefaults(loaded.artifactEtiquette);
-    this.settings = { ...loaded, artifactEtiquette: etiquette.rules };
-    if (etiquette.added) this.db.setKv(KV_SETTINGS, this.settings);
+    // Room token/cost pause removed — clear any stored default budget.
+    const budgetCleared = loaded.defaultRoomTokenBudget !== null;
+    this.settings = {
+      ...loaded,
+      artifactEtiquette: etiquette.rules,
+      defaultRoomTokenBudget: null
+    };
+    if (etiquette.added || budgetCleared) this.db.setKv(KV_SETTINGS, this.settings);
     this.searchKeys = this.loadSearchKeys();
 
     this.endpointsRegistry = new EndpointRegistry(this.db, this.secrets);
@@ -155,6 +194,11 @@ export class Workspace {
   private async dispatch(op: Op): Promise<OpResult> {
     switch (op.type) {
       case 'workspace.list':
+        // Rehydrate approval cards if the renderer missed the original event
+        // (reload / remount) — otherwise tools stay stuck on await forever.
+        for (const request of this.approvals.listPending()) {
+          this.emit({ type: 'approval.request', request });
+        }
         return { ok: true, value: this.state() };
 
       case 'workspace.openBoard': {
@@ -187,6 +231,14 @@ export class Workspace {
       case 'board.apply': {
         const session = this.require(op.boardId);
         const before = this.snapshotFrameMembership(session);
+        // Detach agents whose frames are deleted — do not wipe the agent.
+        for (const boardOp of op.ops) {
+          if (boardOp.op !== 'removeNode') continue;
+          const node = session.board.getNode(boardOp.id);
+          if (node?.type === 'frame' && node.agentId) {
+            session.agents.detachFrame(node.agentId, { skipRemoveNode: true });
+          }
+        }
         session.board.apply({ origin: null, ops: op.ops, ...(op.label ? { label: op.label } : {}) });
         this.handleHumanBoardOps(session, op.ops, before);
         return { ok: true, value: null };
@@ -226,7 +278,8 @@ export class Workspace {
           name: op.name,
           persona: op.persona,
           ...(op.endpointId ? { endpointId: op.endpointId } : {}),
-          ...(op.model ? { model: op.model } : {})
+          ...(op.model ? { model: op.model } : {}),
+          ...(op.bridge ? { bridge: op.bridge } : {})
         });
         this.syncDirectory(session);
         // Every agent gets a DM immediately: the first thing a user wants after
@@ -254,7 +307,10 @@ export class Workspace {
         this.scheduler.dropAgent(op.agentId);
         session.agents.remove(op.agentId);
         this.inbox.clear(op.agentId);
+        this.pruneAgentRooms(op.agentId);
         this.syncDirectory(session);
+        this.ensureProjectChannel(session);
+        this.emit({ type: 'room.list', rooms: this.rooms.list() });
         return { ok: true, value: null };
       }
 
@@ -263,6 +319,23 @@ export class Workspace {
         if (!session) return { ok: false, error: 'агент не найден' };
         session.runtime.interrupt(op.agentId);
         this.scheduler.dropAgent(op.agentId);
+        return { ok: true, value: null };
+      }
+
+      case 'agent.placeFrame': {
+        const session = this.sessionOfAgent(op.agentId);
+        if (!session) return { ok: false, error: 'агент не найден' };
+        const frame = session.agents.placeFrame(op.agentId, op.position);
+        if (!frame) return { ok: false, error: 'не удалось поставить рамку' };
+        this.syncDirectory(session);
+        return { ok: true, value: { frameId: frame.id, position: frame.position, size: frame.size } };
+      }
+
+      case 'agent.detachFrame': {
+        const session = this.sessionOfAgent(op.agentId);
+        if (!session) return { ok: false, error: 'агент не найден' };
+        session.agents.detachFrame(op.agentId);
+        this.syncDirectory(session);
         return { ok: true, value: null };
       }
 
@@ -291,6 +364,14 @@ export class Workspace {
         this.rooms.remove(op.roomId);
         this.emit({ type: 'room.list', rooms: this.rooms.list() });
         return { ok: true, value: null };
+
+      case 'room.clear': {
+        const room = this.rooms.clear(op.roomId);
+        if (!room) return { ok: false, error: 'комната не найдена' };
+        this.emit({ type: 'room.cleared', roomId: op.roomId });
+        this.emit({ type: 'room.updated', room });
+        return { ok: true, value: null };
+      }
 
       case 'room.send':
         return await this.humanSend(op);
@@ -363,9 +444,17 @@ export class Workspace {
 
       case 'browser.navigate':
       case 'browser.setBounds':
-        // Owned by the host process, which has the WebContentsView. Accepted
-        // here so the renderer has one submission channel for everything.
+      case 'appView.open':
+      case 'appView.navigate':
+      case 'appView.setBounds':
+      case 'appView.stop':
+        // Owned by the Electron host (WebContentsView / desktopCapturer).
         return { ok: true, value: null };
+
+      case 'appView.listSources': {
+        if (!this.appViewBridge) return { ok: true, value: [] };
+        return { ok: true, value: await this.appViewBridge.listSources() };
+      }
 
       case 'provider.list':
         return { ok: true, value: this.endpointsRegistry.views() };
@@ -401,12 +490,20 @@ export class Workspace {
           .then((tokens) => {
             this.chatgpt.save(tokens);
             const endpoint = this.endpointsRegistry.ensureChatGptEndpoint();
-            if (!this.settings.defaultEndpointId) {
+            // Promote ChatGPT when nothing is default, or the saved default
+            // points at a removed provider (common after switching to subscription).
+            const defaultMissing =
+              !this.settings.defaultEndpointId ||
+              !this.endpointsRegistry.find(this.settings.defaultEndpointId);
+            if (defaultMissing) {
               void this.setSettings({ defaultEndpointId: endpoint.id });
             }
             void this.endpointsRegistry.probe(endpoint.id).then(async (probe) => {
               const patch: Record<string, unknown> = {};
-              if (!this.settings.defaultEndpointId) patch.defaultEndpointId = endpoint.id;
+              const stillMissing =
+                !this.settings.defaultEndpointId ||
+                !this.endpointsRegistry.find(this.settings.defaultEndpointId);
+              if (stillMissing) patch.defaultEndpointId = endpoint.id;
               if (!this.settings.defaultModel && probe.models[0]) {
                 patch.defaultModel = probe.models[0];
               }
@@ -708,6 +805,19 @@ export class Workspace {
       this.activeBoardId = [...this.sessions.keys()][0] ?? null;
     }
     await this.persistOpenBoards();
+    this.emit({ type: 'agent.list', agents: this.allAgents() });
+  }
+
+  /** Drop DMs and memberships that referenced a deleted agent. */
+  private pruneAgentRooms(agentId: string): void {
+    for (const room of this.rooms.list()) {
+      if (!room.members.some((m) => m.id === agentId)) continue;
+      if (room.kind === 'dm') {
+        this.rooms.remove(room.id);
+      } else {
+        this.rooms.removeMember(room.id, agentId);
+      }
+    }
   }
 
   state(): WorkspaceState {
@@ -790,15 +900,29 @@ export class Workspace {
     }
 
     // Fail fast in the chat itself when nothing can talk to a model.
-    if (outcome.wake.length > 0 && !this.settings.defaultEndpointId) {
+    if (outcome.wake.length > 0) {
+      const defaultOk =
+        Boolean(this.settings.defaultEndpointId) &&
+        Boolean(this.endpointsRegistry.find(this.settings.defaultEndpointId!));
       const anyEndpoint = this.endpointsRegistry.list().length > 0;
-      this.rooms.systemNotice(
-        op.roomId,
-        anyEndpoint
-          ? 'Не выбран провайдер по умолчанию — откройте Настройки → Провайдеры и нажмите Default.'
-          : 'Нет LLM-провайдера. Откройте Настройки → Провайдеры и подключите ChatGPT или API-ключ.'
-      );
-      return { ok: true, value: { messageId: outcome.message?.id ?? null, woke: [] } };
+      if (!defaultOk && !anyEndpoint) {
+        this.rooms.systemNotice(
+          op.roomId,
+          'Нет LLM-провайдера. Откройте Настройки → Провайдеры и подключите ChatGPT или API-ключ.'
+        );
+        return { ok: true, value: { messageId: outcome.message?.id ?? null, woke: [] } };
+      }
+      if (!defaultOk && anyEndpoint) {
+        // Auto-heal: pick the first connected provider so a logged-in ChatGPT
+        // subscription works without an extra Default click.
+        const first = this.endpointsRegistry.list()[0]!;
+        void this.setSettings({
+          defaultEndpointId: first.id,
+          ...(this.settings.defaultModel || !first.models[0]
+            ? {}
+            : { defaultModel: first.models[0] })
+        });
+      }
     }
 
     const wakeText = [
@@ -871,6 +995,13 @@ export class Workspace {
     text: string,
     source: 'user' | 'agent' | 'comment' | 'system'
   ): void {
+    // Talking to an off-board agent brings their frame into the current view.
+    if (source === 'user' || source === 'comment') {
+      if (!session.agents.frameOf(agentId)) {
+        session.agents.placeFrame(agentId);
+      }
+    }
+
     const queued = this.scheduler.enqueue({
       agentId,
       boardId: session.id,
@@ -1157,6 +1288,34 @@ export class Workspace {
             stickers: p.stickers.map((s) => ({ id: s.id, emoji: s.emoji }))
           })),
         place: async (input) => this.placeSticker(input)
+      },
+      desktop: {
+        captureBoard: async (opts) => {
+          if (!this.desktopCapture) return null;
+          return this.desktopCapture(opts);
+        }
+      },
+      appView: {
+        listSources: async () => {
+          if (!this.appViewBridge) return [];
+          return this.appViewBridge.listSources();
+        },
+        open: async (input) => {
+          if (!this.appViewBridge) {
+            throw new Error('appView host недоступен (нужен Electron desktop)');
+          }
+          await this.appViewBridge.open(input);
+        },
+        navigate: async (nodeId, url) => {
+          if (!this.appViewBridge) {
+            throw new Error('appView host недоступен (нужен Electron desktop)');
+          }
+          await this.appViewBridge.navigate(nodeId, url);
+        },
+        stop: async (nodeId) => {
+          if (!this.appViewBridge) return;
+          await this.appViewBridge.stop(nodeId);
+        }
       }
     };
   }
@@ -1209,13 +1368,17 @@ export class Workspace {
   }
 
   private onBoardEvent(session: BoardSession, event: EventMsg): void {
+    // BoardSession only knows its own agents; the UI needs the full roster.
+    if (event.type === 'agent.list') {
+      this.syncDirectory(session);
+      this.emit({ type: 'agent.list', agents: this.allAgents() });
+      return;
+    }
+
     this.emit(event);
 
     // Board-level events that carry app-level meaning are translated here, so
     // BoardSession stays unaware of notifications and the directory.
-    if (event.type === 'agent.list') {
-      this.syncDirectory(session);
-    }
     if (event.type === 'turn.completed' && event.usage.totalTokens > 0) {
       this.emit({ type: 'scheduler.state', ...this.scheduler.state });
     }

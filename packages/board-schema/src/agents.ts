@@ -35,6 +35,20 @@ export const ModelRefSchema = z.object({
 });
 export type ModelRef = z.infer<typeof ModelRefSchema>;
 
+/**
+ * How the agent answers in chat.
+ * - builtin: local LLM + tools (default)
+ * - mcp: forward each human message to an MCP tool (Claude Code / Cursor bridge, etc.)
+ * - command: run a shell command with `{message}` placeholder
+ */
+export const AgentBridgeSchema = z.object({
+  kind: z.enum(['builtin', 'mcp', 'command']).default('builtin'),
+  mcpServer: z.string().default(''),
+  mcpTool: z.string().default(''),
+  command: z.string().default('')
+});
+export type AgentBridge = z.infer<typeof AgentBridgeSchema>;
+
 export const AgentSchema = z.object({
   /** Globally unique across all boards, so rooms can span projects. */
   id: z.string(),
@@ -48,6 +62,12 @@ export const AgentSchema = z.object({
   frameNodeId: z.string().nullable().default(null),
   persona: z.string().default(''),
   model: ModelRefSchema,
+  bridge: AgentBridgeSchema.default({
+    kind: 'builtin',
+    mcpServer: '',
+    mcpTool: '',
+    command: ''
+  }),
   toolsets: z.array(z.string()).default(['core', 'board', 'files', 'shell', 'web', 'rooms']),
   approvalPolicy: ApprovalPolicySchema.default('onRequest'),
   sandboxPolicy: SandboxPolicySchema.default('boardWrite'),

@@ -21,6 +21,12 @@ export interface AssembledContext {
 
 const FULL_DETAIL_KINDS = new Set([
   'markdown',
+  'note',
+  'blocks',
+  'codePad',
+  'map',
+  'music',
+  'video',
   'status',
   'todo',
   'kanban',
@@ -28,7 +34,6 @@ const FULL_DETAIL_KINDS = new Set([
   'diff',
   'fileFragment',
   'mermaid',
-  'note',
   'chart'
 ]);
 
