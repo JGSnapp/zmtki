@@ -1,0 +1,531 @@
+/* Blocks added in iteration 3: Chrome, app streams, editors, files, inspector. */
+
+.canvas-column {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+.card-title-spacer {
+  flex: 1;
+}
+
+.card-title .chip {
+  flex: none;
+}
+
+/* --- Chrome ------------------------------------------------------------------ */
+
+.browser-card {
+  background: #fff;
+}
+
+.browser-card .browser-bar {
+  background: #1b1f27;
+}
+
+.chrome-badge {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(#ea4335 0 120deg, #fbbc05 120deg 240deg, #34a853 240deg 360deg);
+}
+
+.chrome-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4285f4;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-btn.is-loading {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.browser-surface-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+  overflow: hidden;
+}
+
+.browser-surface {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  cursor: default;
+}
+
+.browser-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+  background: #1b1f27;
+  color: var(--text-dim);
+}
+
+.browser-error {
+  color: var(--danger);
+}
+
+.browser-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(20, 22, 28, 0.78);
+  color: #e8e8ea;
+  font-size: 11px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.artifact:hover .browser-hint {
+  opacity: 1;
+}
+
+/* --- App stream ------------------------------------------------------------- */
+
+.app-stream {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0b0d11;
+}
+
+.stream-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}
+
+.stream-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.stream-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.live-dot.is-live {
+  background: #ff4d4d;
+  box-shadow: 0 0 6px #ff4d4d;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.source-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  align-content: start;
+}
+
+.source-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.source-tile:hover {
+  border-color: var(--accent);
+}
+
+.source-tile img,
+.source-blank {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  border-radius: 5px;
+  background: #000;
+}
+
+.source-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.source-icon {
+  width: 14px !important;
+  height: 14px;
+  aspect-ratio: auto !important;
+  background: transparent !important;
+}
+
+/* --- Editors ---------------------------------------------------------------- */
+
+.editor-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.editor-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-host.is-hidden {
+  display: none;
+}
+
+.editor-host .cm-editor {
+  height: 100%;
+}
+
+.artifact:not(.is-selected) .cm-editor .cm-cursor {
+  display: none;
+}
+
+.editor-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  background: rgba(224, 175, 104, 0.12);
+  color: var(--warn);
+  border-bottom: 1px solid var(--line);
+}
+
+.editor-banner--error {
+  background: rgba(247, 118, 142, 0.12);
+  color: var(--danger);
+}
+
+.markdown-preview {
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.artifact-code pre.hljs {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font: 12px/1.5 var(--mono);
+  background: #141821;
+}
+
+.artifact-media {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+.artifact-media .artifact-video {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.url-prompt .chip {
+  align-self: flex-start;
+}
+
+/* --- Files, buttons, kanban ------------------------------------------------- */
+
+.artifact-file {
+  cursor: default;
+}
+
+.artifact-file.is-missing .file-name {
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+.file-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.artifact-button.is-pressed {
+  filter: brightness(1.25);
+  transform: scale(0.97);
+}
+
+.kanban-title {
+  align-items: center;
+  gap: 6px;
+}
+
+.kanban-title > span:first-child {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kanban-count {
+  color: var(--text-faint);
+}
+
+.kanban-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.kanban-text {
+  flex: 1;
+  word-break: break-word;
+}
+
+.kanban-x {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.kanban-card:hover .kanban-x,
+.kanban-title:hover .kanban-x {
+  opacity: 1;
+}
+
+.kanban-x:hover {
+  color: var(--danger);
+}
+
+.kanban-add-column {
+  flex: none;
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.kanban-add-column:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* --- Inspector -------------------------------------------------------------- */
+
+.inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 280px;
+  max-height: calc(100% - 80px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: rgba(24, 27, 34, 0.96);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  z-index: 15;
+  animation: menu-pop 160ms var(--ease-out) both;
+  transform-origin: top right;
+}
+
+.inspector-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.inspector.is-collapsed .inspector-head {
+  color: var(--text-dim);
+}
+
+.inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 12px 12px;
+  overflow-y: auto;
+}
+
+.inspector-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.inspector-label {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.inspector-label:empty {
+  display: none;
+}
+
+.inspector-input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  outline: none;
+  user-select: text;
+}
+
+.inspector-input:focus {
+  border-color: var(--accent);
+}
+
+.inspector-textarea {
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.inspector-choice {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.inspector-option {
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.inspector-option.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.inspector-swatches {
+  display: flex;
+  gap: 6px;
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.swatch.is-on {
+  border-color: #fff;
+}
+
+.inspector-color {
+  width: 48px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.inspector-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.inspector-value {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.inspector-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inspector-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.inspector-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+}

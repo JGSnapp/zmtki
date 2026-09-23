@@ -1,0 +1,31 @@
+{
+  "name": "zmtki",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Бесконечная доска для многоагентной работы: артефакты, зоны и CLI-харнессы в одном пространстве",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @zmtki/desktop",
+    "build": "npm run build -w @zmtki/desktop",
+    "test": "vitest run",
+    "typecheck": "tsc -p packages/shared && tsc -p apps/desktop",
+    "bench": "npm run bench -w @zmtki/desktop",
+    "e2e": "npm run e2e -w @zmtki/desktop",
+    "e2e:load": "npm run -w @zmtki/desktop e2e:load",
+    "e2e:zones": "npm run -w @zmtki/desktop e2e:zones",
+    "e2e:blocks": "npm run e2e:blocks -w @zmtki/desktop",
+    "e2e:embeds": "npm run e2e:embeds -w @zmtki/desktop",
+    "e2e:html-freeze": "npm run e2e:html-freeze -w @zmtki/desktop"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

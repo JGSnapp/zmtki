@@ -1,0 +1,2083 @@
+:root {
+  --bg: #0f1115;
+  --canvas: #12141a;
+  --grid: rgba(255, 255, 255, 0.07);
+  --surface: #181b22;
+  --surface-2: #1e222b;
+  --surface-3: #262b36;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --text: #d7dae0;
+  --text-dim: #8b93a7;
+  --text-faint: #5b6478;
+  --accent: #ff7a3d;
+  --accent-soft: rgba(255, 122, 61, 0.16);
+  --ok: #9ece6a;
+  --warn: #e0af68;
+  --danger: #f7768e;
+  --radius: 10px;
+  --font: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  overflow: hidden;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* --- Toolbar --------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 20;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-right: 6px;
+  color: var(--accent);
+}
+
+.tb-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tb-btn:hover {
+  background: var(--surface-3);
+}
+
+.tb-btn.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tb-primary {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tb-board {
+  font-weight: 600;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-rename {
+  height: 30px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0 8px;
+  outline: none;
+}
+
+.tb-path {
+  color: var(--text-faint);
+  font-size: 12px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tb-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.tb-spacer {
+  flex: 1;
+}
+
+.menu-wrap {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  min-width: 240px;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+}
+
+.menu--right {
+  left: auto;
+  right: 0;
+}
+
+.menu--grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 4px 10px;
+  min-width: 640px;
+}
+
+.menu-title {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 8px 2px;
+}
+
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.menu-item:hover,
+.menu-item.is-active {
+  background: var(--surface-3);
+}
+
+.menu-meta {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.board-menu-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.board-menu-open {
+  min-width: 0;
+}
+
+.board-menu-open > span {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-delete,
+.board-delete-confirm {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.board-delete {
+  width: 30px;
+  padding: 6px;
+}
+
+.board-delete svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.board-delete:hover {
+  background: rgba(255, 107, 107, 0.12);
+  color: #ff8a8a;
+}
+
+.board-delete-confirm {
+  margin: 3px 2px 3px 0;
+  padding: 0 8px;
+  background: rgba(255, 107, 107, 0.16);
+  color: #ff9b9b;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.board-delete-confirm:hover {
+  background: rgba(255, 107, 107, 0.27);
+  color: #ffc0c0;
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+
+/* --- Workspace ------------------------------------------------------------- */
+
+.workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.loading {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+
+.board-viewport {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background-color: var(--canvas);
+  cursor: default;
+  isolation: isolate;
+  touch-action: none;
+}
+
+/*
+ * The sheet that covers the board while it moves.
+ *
+ * Nothing under it is hit-tested and nothing under it reacts to hover, which is
+ * what the gesture actually needs — and it costs one element. It replaces a
+ * `pointer-events: none` on every mounted card plus a `cursor` on every element
+ * inside the board, both of which invalidated the style of the whole subtree
+ * twice per gesture: once when the board started moving and once when it stopped.
+ */
+.gesture-shield {
+  position: absolute;
+  inset: 0;
+  display: none;
+  z-index: 5;
+}
+
+.board-viewport.is-moving .gesture-shield {
+  display: block;
+}
+
+.board-viewport.is-panning .gesture-shield {
+  display: block;
+  cursor: grabbing;
+}
+
+.board-viewport.is-panning {
+  cursor: grabbing;
+}
+
+/*
+ * The grid, in board units. A tile a few viewports across, carried by the
+ * scene's own transform, so panning and zooming cost no repaint at all; the
+ * camera moves and resizes it only when the view reaches its edge.
+ *
+ * It used to be a single 1 000 000 px square. That square sits inside the layer
+ * the scene is promoted to during a gesture, so Chromium had to tile and
+ * re-raster a surface thousands of times the size of the window on every step
+ * of a zoom. `contain: strict` keeps re-laying it out of the rest of the board.
+ */
+.board-grid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  contain: strict;
+  pointer-events: none;
+  /* Dot size is a fraction of the spacing, so it scales with the board and
+     stays visible: a fixed 0.8px dot vanished the moment the board zoomed out. */
+  background-image: radial-gradient(
+    circle,
+    var(--grid) calc(var(--grid-step, 20px) / 26),
+    transparent calc(var(--grid-step, 20px) / 18)
+  );
+  background-size: var(--grid-step, 20px) var(--grid-step, 20px);
+}
+
+.board-scene {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+}
+
+/*
+ * The legend: zone names and agent labels, which hold their size on screen
+ * while the board shrinks under them. Zero-sized and unpositioned in flow, so
+ * everything inside still resolves against the scene as it did before.
+ *
+ * `--label-scale` is written here once per frame. An inherited custom property
+ * invalidates the style of everything below the element it is set on, which is
+ * why this is a layer of its own and not the scene: a dozen labels instead of
+ * every card on the board, on every frame of a zoom.
+ */
+.board-labels {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  --label-scale: 1;
+}
+
+/*
+ * The scene's compositor layer is promoted and dropped by the camera, inline,
+ * so it can be held across the gaps between wheel notches: a promoted layer
+ * makes Chromium scale the raster it already has instead of drawing the board
+ * again at every intermediate size, and dropping it at rest is what makes the
+ * text sharp again rather than an upscaled bitmap.
+ */
+
+/*
+ * A terminal and a streamed page are canvases that redraw themselves; while the
+ * board moves, the compositor is told to stretch the picture it already has.
+ * Only these get promoted: doing the same to thirty ordinary cards measured
+ * worse, and three runs each put this at 4 dropped frames against 9 without.
+ *
+ * The selector deliberately names no class an ordinary card carries. Blink
+ * invalidates by class: a rule written as `.is-moving .artifact …` makes every
+ * element with the class `artifact` recompute its style the moment the board
+ * starts or stops moving — the whole board, twice per gesture, for a hint meant
+ * for two cards.
+ */
+.board-viewport.is-moving .live-surface {
+  will-change: transform;
+}
+
+/*
+ * Embedded pages would swallow pointer events mid-gesture. A page lives in
+ * another process: once the pointer is over it, the board loses the capture
+ * and receives a pointercancel — which is how a dragged browser card used to
+ * fly off to the corner as soon as it became selected under the cursor.
+ *
+ * Only the gestures that have no shield over the board need this. A pan and a
+ * camera in motion are already covered by `.gesture-shield`, which sits above
+ * every card and takes the hit test itself.
+ */
+.board-viewport.is-gesturing iframe,
+.board-viewport.is-gesturing webview,
+.board-viewport.is-gesturing video {
+  pointer-events: none !important;
+}
+
+.artifact a,
+.artifact img {
+  -webkit-user-drag: none;
+}
+
+/*
+ * Until it is selected, an interactive card is part of the board: the wheel
+ * over a terminal or a page scrolls the board, not the card's own content.
+ * Selecting it hands the input over — which is the same rule the keyboard and
+ * the pointer already follow.
+ */
+.artifact.is-interactive:not(.is-selected) .artifact-body {
+  pointer-events: none;
+}
+
+.overview-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+/* --- Artifacts ------------------------------------------------------------- */
+
+.artifact {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: var(--radius);
+  /* Each card is its own layout island: editing one never re-lays out its neighbours.
+     Not paint containment — that would clip the shadow and lift of a held card. */
+  contain: layout style;
+}
+
+.artifact-body {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  overflow: hidden;
+  /* A card's repaint stays inside its own box, always — not only while the
+     board moves. Paint containment on the body rather than on the card leaves
+     the card's own shadow and its selection ring free to draw outside it. */
+  contain: layout style paint;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.artifact.is-bare .artifact-body {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.artifact.is-selected .artifact-body {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+
+.artifact.is-bare.is-selected .artifact-body {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.artifact.is-reduced .artifact-body {
+  box-shadow: none;
+}
+
+.resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--accent);
+  cursor: nwse-resize;
+}
+
+.anchor {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--canvas);
+  border: 2px solid var(--accent);
+  cursor: crosshair;
+}
+
+.anchor:hover {
+  background: var(--accent);
+}
+
+.anchor-top {
+  left: calc(50% - 5.5px);
+  top: -6px;
+}
+
+.anchor-bottom {
+  left: calc(50% - 5.5px);
+  bottom: -6px;
+}
+
+.anchor-left {
+  top: calc(50% - 5.5px);
+  left: -6px;
+}
+
+.anchor-right {
+  top: calc(50% - 5.5px);
+  right: -6px;
+}
+
+.agent-badge {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  padding: 1px 8px;
+  border-radius: 6px 6px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--agent);
+  color: #0b0d11;
+}
+
+.card-title {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: grab;
+  flex: none;
+}
+
+.card-title .lang {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+
+.dirty {
+  color: var(--warn);
+}
+
+.artifact-text {
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px;
+  overflow: hidden;
+  user-select: text;
+}
+
+.artifact-text .placeholder {
+  color: var(--text-faint);
+}
+
+.artifact-editor {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  user-select: text;
+}
+
+.artifact-note {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius);
+  color: #1f1a0e;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.note-yellow { background: #f2d680; }
+.note-blue { background: #a9c4ff; }
+.note-green { background: #b9e08f; }
+.note-pink { background: #f5a8bd; }
+.note-purple { background: #cdb4f6; }
+.note-gray { background: #c9ced8; }
+
+.artifact-note .artifact-editor {
+  color: #1f1a0e;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.artifact-plain-text {
+  padding: 4px 2px;
+}
+
+.artifact-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact.is-selected .artifact-scroll,
+.artifact.is-selected pre {
+  user-select: text;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin: 0.4em 0 0.3em;
+  line-height: 1.25;
+}
+
+.markdown h1 { font-size: 1.35em; }
+.markdown h2 { font-size: 1.2em; }
+.markdown h3 { font-size: 1.08em; }
+
+.markdown p,
+.markdown ul,
+.markdown ol {
+  margin: 0.35em 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.3em;
+}
+
+.markdown code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: rgba(127, 127, 127, 0.18);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.markdown pre {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px;
+  border-radius: 6px;
+  overflow: auto;
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown td,
+.markdown th {
+  border: 1px solid var(--line-strong);
+  padding: 2px 6px;
+}
+
+.artifact-code,
+.artifact-editor-card,
+.artifact-web,
+.artifact-audio,
+.empty-card {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-code pre {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font: 12px/1.5 var(--mono);
+  color: #c8d3f5;
+  background: #141821;
+}
+
+.editor-area {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  padding: 10px 12px;
+  background: #141821;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.editor-area--code {
+  font: 12px/1.5 var(--mono);
+  tab-size: 2;
+  white-space: pre;
+}
+
+.artifact-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  /* What shows in the frames before the document has painted anything. The
+     board's own colour, so a card on its way in is not a pale rectangle. */
+  background: var(--canvas);
+}
+
+.artifact-html-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+/*
+ * A still of an embedded document, shown while the board moves.
+ *
+ * A sandboxed srcdoc iframe and a <webview> are both out-of-process frames:
+ * their pixels come from another frame tree and arrive late while an ancestor's
+ * transform changes every frame, and what shows until they do is the frame's
+ * white background.
+ *
+ * The live document is never hidden underneath. Hiding it — `visibility:
+ * hidden` on the iframe for the length of the gesture — is what made the flash
+ * worse rather than better: Chromium lets the guest's surface go and has to
+ * produce it again at the end, so every gesture finished with the white frame
+ * the still was there to prevent. Left alone, the document keeps its surface
+ * and the still is only a cover over it.
+ *
+ * Holding and fading are one transition with a delay rather than a class the
+ * camera toggles. The hold is the time a document needs to paint once at its
+ * new scale; running it on the compositor costs no script, no timer and no
+ * style recalculation on a board full of pages — the class that used to do
+ * this restyled every iframe, every surface and every still twice a gesture.
+ */
+.embed-still {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0;
+  transition: opacity 180ms ease-out 140ms;
+  pointer-events: none;
+  user-select: none;
+}
+
+/*
+ * Covering must be instant and uncovering must not: the gesture starts on the
+ * same frame the transform does, and the fade is what hides a document still
+ * catching up with the scale it ended at.
+ */
+.board-viewport.is-moving .embed-still,
+.artifact.is-dragging .embed-still {
+  opacity: 1;
+  transition: none;
+}
+
+/*
+ * With a still in front of it, a local document is taken out of the picture for
+ * the length of the gesture: it is the re-rasterising of forty pages at a new
+ * scale every frame that the board cannot afford. On a board of forty-two HTML
+ * cards this took a zoom from 15 of 48 frames over 32 ms down to 6 of 50, and
+ * the worst frame from 100 ms to 67 ms.
+ *
+ * Only `.artifact-frame` — the srcdoc iframe, which now renders in this process
+ * — and only where `has-still` says there is something to look at instead. A
+ * `<webview>` is never hidden: it is a real out-of-process guest, and hiding
+ * one throws away the surface it would have to build again, which is the flash
+ * this whole arrangement exists to avoid.
+ */
+.board-viewport.is-moving .has-still > .artifact-frame {
+  visibility: hidden;
+}
+
+.artifact-webview-surface {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/*
+ * Sized in script, not here: the guest is laid out at a desktop width and
+ * scaled into the card, so both its size and its scale come from the card's
+ * measured box (see SITE_WIDTH).
+ */
+.artifact-webview {
+  display: flex;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.browser-bar {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  flex: none;
+}
+
+.icon-btn {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--surface-3);
+}
+
+.browser-address {
+  flex: 1;
+}
+
+.browser-address input,
+.url-prompt input,
+.kanban-input {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  outline: none;
+  user-select: text;
+}
+
+.url-prompt {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: var(--text-dim);
+}
+
+.empty-hint {
+  padding: 12px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.artifact-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #0b0d11;
+}
+
+.artifact-video {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: block;
+}
+
+.artifact-audio audio {
+  width: calc(100% - 20px);
+  margin: 10px;
+}
+
+.artifact-button {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 150, 90, 0.55);
+  background: linear-gradient(180deg, #ff8a4c, #e25a1f);
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.artifact-button:hover {
+  filter: brightness(1.1);
+}
+
+.artifact-button:active {
+  transform: translateY(1px);
+}
+
+.artifact-kanban {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  overflow: auto;
+}
+
+.kanban-column {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.kanban-title {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 2px 4px;
+  cursor: grab;
+}
+
+.kanban-title span {
+  color: var(--text-faint);
+}
+
+.kanban-card {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  cursor: grab;
+}
+
+.kanban-add {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  text-align: left;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.kanban-add:hover {
+  color: var(--text);
+}
+
+.artifact-shape {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.artifact-shape svg {
+  position: absolute;
+  inset: 0;
+}
+
+.shape-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+.shape-label .artifact-text {
+  height: auto;
+}
+
+.artifact-drawing {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.artifact-drawing--active {
+  cursor: crosshair;
+}
+
+.artifact-file {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+}
+
+.file-icon {
+  width: 44px;
+  height: 54px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--accent);
+  font: 600 11px var(--mono);
+  text-transform: uppercase;
+}
+
+.file-meta {
+  min-width: 0;
+}
+
+.file-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-path {
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-reduced {
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px;
+  overflow: hidden;
+}
+
+.reduced-type {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.reduced-caption {
+  margin-top: 4px;
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+}
+
+.reduced-note {
+  background: #4a4128;
+}
+
+/* --- Terminal -------------------------------------------------------------- */
+
+.terminal-artifact {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0b0d11;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+
+.artifact[style*='--agent'] .terminal-artifact {
+  border-color: color-mix(in srgb, var(--agent) 60%, transparent);
+}
+
+.artifact.is-selected .terminal-artifact {
+  border-color: var(--accent);
+}
+
+.terminal-bar {
+  height: 32px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  background: #151820;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  font-size: 12px;
+}
+
+.terminal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.terminal-dot--running {
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+
+.terminal-dot--exited {
+  background: var(--danger);
+}
+
+.terminal-title {
+  font-weight: 600;
+}
+
+.terminal-meta {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-spacer {
+  flex: 1;
+}
+
+.terminal-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Laid out at the board zoom and shrunk back from the top-left corner; see TerminalArtifact. */
+.terminal-scaled {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  box-sizing: border-box;
+}
+
+.terminal-scaled .xterm {
+  height: 100%;
+}
+
+.terminal-overlay {
+  position: absolute;
+  inset: 32px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(11, 13, 17, 0.85);
+  color: var(--text-dim);
+}
+
+.btn,
+.chip {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.btn {
+  padding: 6px 14px;
+}
+
+.chip {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.btn:hover,
+.chip:hover {
+  background: var(--surface-3);
+}
+
+.chip--ok {
+  border-color: rgba(158, 206, 106, 0.5);
+  color: var(--ok);
+}
+
+/* --- Arrows, zones, markers ------------------------------------------------ */
+
+.arrow-layer {
+  pointer-events: none;
+}
+
+/*
+ * A line and its head are one drawing: both are in board units and scale with
+ * the board. Mixing the two — a stroke pinned to screen pixels and a head in
+ * board units — made the head creep over the block it points at as the zoom
+ * changed. What stays screen-sized is the invisible strip that catches the
+ * pointer, which is about reach, not about the picture.
+ */
+.arrow-line.is-dashed {
+  stroke-dasharray: 6 5;
+}
+
+.arrow-hit {
+  stroke-width: 14;
+  vector-effect: non-scaling-stroke;
+}
+
+.bend-add {
+  fill: rgba(255, 122, 61, 0.45);
+  cursor: copy;
+  pointer-events: all;
+}
+
+/* The two ends of a selected arrow: drag one to re-hang or re-aim the line. */
+.arrow-end-handle {
+  fill: var(--canvas);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+  pointer-events: all;
+}
+
+.arrow-end-handle:active {
+  cursor: grabbing;
+}
+
+.bend-handle {
+  fill: var(--canvas);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+  pointer-events: all;
+}
+
+/*
+ * A zone is filled per rectangle but outlined once around the union: two swept
+ * squares of one zone must read as one region, not as two boxes touching.
+ */
+.zone {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: color-mix(in srgb, var(--zone) 7%, transparent);
+  pointer-events: none;
+}
+
+.zone--pending {
+  background: color-mix(in srgb, var(--zone) 14%, transparent);
+}
+
+.zone-group.is-selected .zone {
+  background: color-mix(in srgb, var(--zone) 13%, transparent);
+}
+
+.zone-outline {
+  pointer-events: none;
+}
+
+.zone-outline line {
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: square;
+}
+
+.zone-group.is-selected .zone-outline line {
+  stroke-width: 2.5;
+}
+
+.zone-group--pending .zone-outline line {
+  stroke-dasharray: 10 7;
+  animation: zone-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes zone-pulse {
+  50% {
+    stroke-opacity: 0.35;
+  }
+}
+
+/* The rectangle being swept out, before it is added to or cut from a zone. */
+.zone-sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 1.5px dashed var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  z-index: 100001;
+}
+
+.zone-sweep--cut {
+  border-color: var(--danger, #ff6b6b);
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.tool-zone {
+  cursor: crosshair;
+}
+
+.zone-title {
+  position: absolute;
+  transform-origin: 0 100%;
+  top: -30px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--zone);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.zone-hint {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.zone-name {
+  cursor: pointer;
+}
+
+.zone-rename {
+  width: 160px;
+  padding: 1px 6px;
+  border: 1px solid var(--zone);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.zone-swatches {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.zone-swatch {
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.zone-swatch.is-on {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.chip--warn {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: #ff8a8a;
+}
+
+.agent-beacon {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 27px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--agent);
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 100000;
+  transform-origin: 11px 25px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.55));
+}
+
+.agent-beacon::after {
+  content: '';
+  position: absolute;
+  left: 7px;
+  bottom: -2px;
+  width: 8px;
+  height: 4px;
+  border: 1.5px solid var(--agent);
+  border-radius: 50%;
+  animation: agent-beacon-pulse 1.8s ease-out infinite;
+}
+
+.agent-beacon svg {
+  display: block;
+  width: 22px;
+  height: 27px;
+  overflow: visible;
+}
+
+.agent-beacon path {
+  fill: currentColor;
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 1;
+}
+
+.agent-beacon circle {
+  fill: #0b0d11;
+  stroke: rgba(255, 255, 255, 0.72);
+  stroke-width: 1;
+}
+
+.agent-beacon:hover {
+  filter: brightness(1.12) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6));
+}
+
+.agent-beacon:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
+
+@keyframes agent-beacon-pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.55);
+  }
+  75%,
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+/*
+ * The line dragged out of a card's anchor. Screen-sized like the arrow hit
+ * strips, so a zoom never rewrites its attributes.
+ */
+.connect-preview line {
+  vector-effect: non-scaling-stroke;
+}
+
+.marquee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  z-index: 100001;
+}
+
+/* --- HUD ------------------------------------------------------------------- */
+
+.hud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  /* Above the sheet that covers the board while it moves, so the zoom buttons
+     still answer during a fling. */
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(24, 27, 34, 0.92);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+  z-index: 10;
+}
+
+.hud-btn {
+  min-width: 28px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.hud-btn:hover {
+  background: var(--surface-3);
+}
+
+.hud-zoom {
+  min-width: 54px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.hud-info {
+  color: var(--text-faint);
+  font-size: 11px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Agents panel ---------------------------------------------------------- */
+
+.agents-panel {
+  width: 260px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.agents-panel section {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+/*
+ * The rail: what the panel is most of the time. Harness marks and agent dots in
+ * one column, everything else in tooltips, so the board keeps the screen. It
+ * opens on the arrow — and by itself when an agent asks something.
+ */
+.agents-panel--rail {
+  width: 46px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  overflow-x: hidden;
+}
+
+.rail-toggle {
+  width: 26px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rail-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.rail-sep {
+  width: 22px;
+  height: 1px;
+  background: var(--line);
+}
+
+.harness.rail-item {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  min-height: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.harness.rail-item:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+
+.rail-item .harness-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Wired to the board over MCP — the one thing worth a mark of its own here. */
+.rail-dot {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.rail-agent {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--agent);
+  background: color-mix(in srgb, var(--agent) 18%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.rail-agent.is-running {
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent) 18%, transparent);
+}
+
+.rail-agent--sub {
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
+}
+
+.rail-foot {
+  margin-top: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-head h3 {
+  margin-bottom: 8px;
+}
+
+.agents-panel h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.count {
+  color: var(--text-dim);
+}
+
+/*
+ * Harnesses read as a row of marks, not a list of paragraphs: what you do with
+ * them is drag one onto the board, and the mark is what you aim at.
+ */
+.harness-list {
+  display: grid;
+  /* minmax(0, …) so a long name shrinks its tile instead of stretching it. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.harness {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-height: 70px;
+  padding: 12px 4px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: grab;
+  text-align: center;
+}
+
+.harness:hover {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+
+.harness:active {
+  cursor: grabbing;
+}
+
+.harness-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--text);
+}
+
+/* Each CLI in its own colour, so the row is scanned by colour as much as shape. */
+.harness-icon--claude {
+  color: #d97757;
+}
+
+.harness-icon--codex {
+  color: #e6e8ee;
+}
+
+.harness-icon--opencode {
+  color: #b7b3b3;
+}
+
+.harness-icon--shell {
+  color: var(--accent);
+}
+
+.harness--missing {
+  opacity: 0.5;
+}
+
+.harness--missing .harness-icon {
+  color: var(--text-faint);
+}
+
+.harness-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* State the mark cannot carry: MCP wiring, or a CLI that is not installed. */
+.harness-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  color: var(--ok);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.harness-badge--off {
+  background: var(--surface-3);
+  color: var(--text-faint);
+}
+
+.panel-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.agent-card {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--agent);
+  margin-bottom: 8px;
+}
+
+.agent-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.agent-dot.is-running {
+  background: var(--agent);
+  box-shadow: 0 0 6px var(--agent);
+}
+
+.agent-name {
+  font-weight: 600;
+}
+
+.agent-state {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.agent-line {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-error {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.agent-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.panel-foot {
+  margin-top: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+  border-bottom: 0 !important;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: 640px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  z-index: 100;
+}
+
+/* --- Agent rules, subagents, asks ------------------------------------------- */
+
+.agent-purpose {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.agent-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.rule-label {
+  white-space: nowrap;
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stepper .chip {
+  min-width: 22px;
+  text-align: center;
+}
+
+.stepper .chip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.stepper-value {
+  min-width: 30px;
+  text-align: center;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-zone {
+  max-width: 130px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+/* A subagent is drawn inside its parent's card, tied to it by a rail. */
+.agent-children {
+  margin: 8px 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--agent) 45%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-card--sub {
+  padding: 8px;
+}
+
+.ask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* An agent waiting on the user: its call is blocked until one of these is pressed. */
+.ask {
+  padding: 10px;
+  border: 1px solid rgba(255, 181, 71, 0.5);
+  border-radius: var(--radius);
+  background: rgba(255, 181, 71, 0.08);
+  animation: card-enter 240ms var(--ease-out) both;
+}
+
+.ask-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ask-body {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.ask-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+/* --- Buttons left by agents -------------------------------------------------- */
+
+.artifact-button-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.artifact-button.is-asking {
+  filter: saturate(0.7) brightness(0.85);
+}
+
+.button-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -18px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * What the press will actually do, shown before it does it. Buttons an agent
+ * created never run on the first click; this is that second look.
+ */
+.button-confirm {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  margin-top: 6px;
+  width: max-content;
+  max-width: 320px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-pop, 0 10px 30px rgba(0, 0, 0, 0.45));
+  z-index: 10;
+  animation: card-enter 160ms var(--ease-out) both;
+}
+
+.button-what {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.button-what code {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* --- Extra MCP servers ------------------------------------------------------ */
+
+/*
+ * Capabilities the user grants their agents. Deliberately plain: a checkbox, a
+ * name and a sentence about what it does, with the command it runs in the
+ * tooltip — nothing an agent can reach should be switched on by something that
+ * does not say what it is.
+ */
+.panel-note {
+  margin: 0 0 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-server {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.mcp-server:hover {
+  border-color: var(--line-strong);
+}
+
+.mcp-server input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.mcp-server--missing {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.mcp-server--missing input {
+  cursor: default;
+}
+
+.mcp-server-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mcp-server-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mcp-server-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/*
+ * A HUD button that is a switch rather than an action: it shows its state, so
+ * the board's appearance is never something the user has to test by zooming.
+ */
+.hud-toggle {
+  color: var(--text-faint);
+}
+
+.hud-toggle.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
